@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -83,7 +83,7 @@ DisplayError CompManager::RegisterDisplay(int32_t display_id, DisplayType type,
                                           const HWPanelInfo &hw_panel_info,
                                           const HWMixerAttributes &mixer_attributes,
                                           const DisplayConfigVariableInfo &fb_config,
-                                          Handle *display_ctx, uint32_t *default_clk_hz) {
+                                          Handle *display_ctx, HWQosData*default_qos_data) {
   SCOPE_LOCK(locker_);
 
   DisplayError error = kErrorNone;
@@ -121,8 +121,8 @@ DisplayError CompManager::RegisterDisplay(int32_t display_id, DisplayType type,
     return error;
   }
 
-  error = resource_intf_->Perform(ResourceInterface::kCmdGetDefaultClk,
-                                  display_comp_ctx->display_resource_ctx, default_clk_hz);
+  error = resource_intf_->Perform(ResourceInterface::kCmdGetDefaultQosData,
+                                  display_comp_ctx->display_resource_ctx, default_qos_data);
   if (error != kErrorNone) {
     strategy->Deinit();
     delete strategy;
@@ -208,7 +208,7 @@ DisplayError CompManager::ReconfigureDisplay(Handle comp_handle,
                                              const HWPanelInfo &hw_panel_info,
                                              const HWMixerAttributes &mixer_attributes,
                                              const DisplayConfigVariableInfo &fb_config,
-                                             uint32_t *default_clk_hz) {
+                                             HWQosData*default_qos_data) {
   SCOPE_LOCK(locker_);
   DTRACE_SCOPED();
 
@@ -222,8 +222,8 @@ DisplayError CompManager::ReconfigureDisplay(Handle comp_handle,
     return error;
   }
 
-  error = resource_intf_->Perform(ResourceInterface::kCmdGetDefaultClk,
-                                  display_comp_ctx->display_resource_ctx, default_clk_hz);
+  error = resource_intf_->Perform(ResourceInterface::kCmdGetDefaultQosData,
+                                  display_comp_ctx->display_resource_ctx, default_qos_data);
   if (error != kErrorNone) {
     return error;
   }
@@ -275,7 +275,7 @@ void CompManager::PrepareStrategyConstraints(Handle comp_handle, HWLayers *hw_la
   }
 
   uint32_t app_layer_count = UINT32(hw_layers->info.stack->layers.size()) - 1;
-  if (display_comp_ctx->idle_fallback || display_comp_ctx->thermal_fallback_) {
+  if (display_comp_ctx->idle_fallback) {
     // Handle the idle timeout by falling back
     constraints->safe_mode = true;
   }
@@ -335,12 +335,9 @@ DisplayError CompManager::Prepare(Handle display_ctx, HWLayers *hw_layers) {
 
   if (error != kErrorNone) {
     resource_intf_->Stop(display_resource_ctx, hw_layers);
-    if (safe_mode_ && display_comp_ctx->first_cycle_) {
-      DLOGW("Composition strategies exhausted for display = %d on first cycle",
-            display_comp_ctx->display_type);
-    } else {
-      DLOGE("Composition strategies exhausted for display = %d", display_comp_ctx->display_type);
-    }
+    DLOGE("Composition strategies exhausted for display = %d-%d. (first frame = %s)",
+          display_comp_ctx->display_id, display_comp_ctx->display_type,
+          display_comp_ctx->first_cycle_ ? "True" : "False");
     return error;
   }
 
@@ -376,30 +373,6 @@ DisplayError CompManager::Commit(Handle display_ctx, HWLayers *hw_layers) {
                              reinterpret_cast<DisplayCompositionContext *>(display_ctx);
 
   return resource_intf_->Commit(display_comp_ctx->display_resource_ctx, hw_layers);
-}
-
-DisplayError CompManager::ReConfigure(Handle display_ctx, HWLayers *hw_layers) {
-  SCOPE_LOCK(locker_);
-
-  DTRACE_SCOPED();
-  DisplayCompositionContext *display_comp_ctx =
-                             reinterpret_cast<DisplayCompositionContext *>(display_ctx);
-  Handle &display_resource_ctx = display_comp_ctx->display_resource_ctx;
-
-  DisplayError error = kErrorUndefined;
-  resource_intf_->Start(display_resource_ctx);
-  error = resource_intf_->Prepare(display_resource_ctx, hw_layers);
-
-  if (error != kErrorNone) {
-    DLOGE("Reconfigure failed for display = %d", display_comp_ctx->display_type);
-  }
-
-  resource_intf_->Stop(display_resource_ctx, hw_layers);
-  if (error != kErrorNone) {
-      error = resource_intf_->PostPrepare(display_resource_ctx, hw_layers);
-  }
-
-  return error;
 }
 
 DisplayError CompManager::PostCommit(Handle display_ctx, HWLayers *hw_layers) {
@@ -455,20 +428,8 @@ void CompManager::ProcessIdleTimeout(Handle display_ctx) {
   if (!display_comp_ctx) {
     return;
   }
+
   display_comp_ctx->idle_fallback = true;
-}
-
-void CompManager::ProcessThermalEvent(Handle display_ctx, int64_t thermal_level) {
-  SCOPE_LOCK(locker_);
-
-  DisplayCompositionContext *display_comp_ctx =
-          reinterpret_cast<DisplayCompositionContext *>(display_ctx);
-
-  if (thermal_level >= kMaxThermalLevel) {
-    display_comp_ctx->thermal_fallback_ = true;
-  } else {
-    display_comp_ctx->thermal_fallback_ = false;
-  }
 }
 
 void CompManager::ProcessIdlePowerCollapse(Handle display_ctx) {
@@ -655,6 +616,12 @@ void CompManager::HandleSecureEvent(Handle display_ctx, SecureEvent secure_event
     resource_intf_->Perform(ResourceInterface::kCmdDisableRotatorOneFrame,
                             display_comp_ctx->display_resource_ctx);
   }
+  if (secure_event == kTUITransitionEnd) {
+    resource_intf_->Perform(ResourceInterface::kCmdResetLUT,
+                            display_comp_ctx->display_resource_ctx);
+    safe_mode_ = false;
+  }
+  safe_mode_ = (secure_event == kTUITransitionStart) ? true : safe_mode_;
 }
 
 void CompManager::UpdateStrategyConstraints(bool is_primary, bool disabled) {

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2019-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -25,12 +25,46 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*    * Redistributions of source code must retain the above copyright
+*      notice, this list of conditions and the following disclaimer.
+*
+*    * Redistributions in binary form must reproduce the above
+*      copyright notice, this list of conditions and the following
+*      disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*
+*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*      contributors may be used to endorse or promote products derived
+*      from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <drm.h>
-#include <drm/sde_drm.h>
+#include <display/drm/sde_drm.h>
 #include <drm/msm_drm.h>
 #include <drm_logger.h>
 #include <errno.h>
@@ -162,6 +196,7 @@ static DRMTopology GetTopologyEnum(const string &topology) {
   if (topology == "sde_quadpipemerge") return DRMTopology::QUAD_LM_MERGE;
   if (topology == "sde_quadpipe_dscmerge") return DRMTopology::QUAD_LM_DSCMERGE;
   if (topology == "sde_quadpipe_3dmerge_dsc") return DRMTopology::QUAD_LM_MERGE_DSC;
+  if (topology == "sde_quadpipe_dsc4hsmerge") return DRMTopology::QUAD_LM_DSC4HSMERGE;
   if (topology == "sde_ppsplit") return DRMTopology::PPSPLIT;
   return DRMTopology::UNKNOWN;
 }
@@ -375,7 +410,8 @@ int DRMConnectorManager::Reserve(DRMDisplayType disp_type, DRMDisplayToken *toke
     if (conn.second->GetStatus() == DRMStatus::FREE) {
       uint32_t conn_type;
       conn.second->GetType(&conn_type);
-      if ((disp_type == DRMDisplayType::PERIPHERAL && conn_type == DRM_MODE_CONNECTOR_DSI) ||
+      if ((disp_type == DRMDisplayType::PERIPHERAL &&
+          (conn_type == DRM_MODE_CONNECTOR_DSI || conn_type == DRM_MODE_CONNECTOR_eDP)) ||
           (disp_type == DRMDisplayType::VIRTUAL && conn_type == DRM_MODE_CONNECTOR_VIRTUAL) ||
           (disp_type == DRMDisplayType::TV && IsTVConnector(conn_type))) {
         if (conn.second->IsConnected()) {
@@ -475,9 +511,6 @@ void DRMConnector::ParseProperties() {
       PopulateFrameTriggerModes(info);
     } else if (prop_enum == DRMProperty::COLORSPACE) {
       PopulateSupportedColorspaces(info);
-    } else if (prop_enum == DRMProperty::MAX) {
-      DRM_LOGD("DRMProperty %s is not defined", info->name);
-      return;
     }
 
     prop_mgr_.SetPropertyId(prop_enum, info->prop_id);
@@ -577,11 +610,11 @@ void DRMConnector::ParseModeProperties(uint64_t blob_id, DRMConnectorInfo *info)
     return;
   }
 
-  if (!blob->data) {
+  if (!info->modes.size()) {
     return;
   }
 
-  if (!info->modes.size()) {
+  if (!blob->data) {
     return;
   }
 
@@ -605,6 +638,9 @@ void DRMConnector::ParseModeProperties(uint64_t blob_id, DRMConnectorInfo *info)
   const string pu_roimerge = "partial_update_roimerge=";
   const string bit_clk_rate = "bit_clk_rate=";
   const string mdp_transfer_time_us = "mdp_transfer_time_us=";
+  const string allowed_mode_switch = "allowed_mode_switch=";
+  const string has_cwb_crop = "has_cwb_crop=";
+  const string has_dedicated_cwb_support = "has_dedicated_cwb_support=";
 
   DRMModeInfo *mode_item = &info->modes.at(0);
   unsigned int index = 0;
@@ -639,6 +675,12 @@ void DRMConnector::ParseModeProperties(uint64_t blob_id, DRMConnectorInfo *info)
       mode_item->bit_clk_rate = std::stoi(string(line, bit_clk_rate.length()));
     } else if (line.find(mdp_transfer_time_us) != string::npos) {
       mode_item->transfer_time_us = std::stoi(string(line, mdp_transfer_time_us.length()));
+    } else if (line.find(allowed_mode_switch) != string::npos) {
+      mode_item->allowed_mode_switch = std::stoi(string(line, allowed_mode_switch.length()));
+    } else if (line.find(has_cwb_crop) != string::npos) {
+      mode_item->has_cwb_crop = std::stoi(string(line, has_cwb_crop.length()));
+    } else if (line.find(has_dedicated_cwb_support) != string::npos) {
+      mode_item->has_dedicated_cwb = std::stoi(string(line, has_dedicated_cwb_support.length()));
     }
   }
 
@@ -712,13 +754,12 @@ int DRMConnector::GetInfo(DRMConnectorInfo *info) {
     DRM_LOGW("Zero modes on connector %u.", conn_id);
   }
 
-  if (!drm_connector_->modes) {
-    DLOGW("Connector %u not found.", conn_id);
-    return 0;
-  }
-
   for (auto i = 0; i < drm_connector_->count_modes; i++) {
     DRMModeInfo modes_item {};
+    if (!drm_connector_->modes) {
+      DLOGW("Connector %u not found.", conn_id);
+      return 0;
+    }
     modes_item.mode = drm_connector_->modes[i];
     info->modes.push_back(modes_item);
   }
@@ -986,20 +1027,19 @@ void DRMConnector::SetROI(drmModeAtomicReq *req, uint32_t obj_id, uint32_t num_r
     return;
   }
 
-  static struct sde_drm_roi_v1 roi_v1 {};
-  memset(&roi_v1, 0, sizeof(roi_v1));
-  roi_v1.num_rects = num_roi;
+  memset(&roi_v1_, 0, sizeof(roi_v1_));
+  roi_v1_.num_rects = num_roi;
 
   for (uint32_t i = 0; i < num_roi; i++) {
-    roi_v1.roi[i].x1 = conn_rois[i].left;
-    roi_v1.roi[i].x2 = conn_rois[i].right;
-    roi_v1.roi[i].y1 = conn_rois[i].top;
-    roi_v1.roi[i].y2 = conn_rois[i].bottom;
+    roi_v1_.roi[i].x1 = conn_rois[i].left;
+    roi_v1_.roi[i].x2 = conn_rois[i].right;
+    roi_v1_.roi[i].y1 = conn_rois[i].top;
+    roi_v1_.roi[i].y2 = conn_rois[i].bottom;
     DRM_LOGD("Conn %d, ROI[l,t,b,r][%d %d %d %d]", obj_id,
-             roi_v1.roi[i].x1,roi_v1.roi[i].y1,roi_v1.roi[i].x2,roi_v1.roi[i].y2);
+             roi_v1_.roi[i].x1,roi_v1_.roi[i].y1,roi_v1_.roi[i].x2,roi_v1_.roi[i].y2);
   }
   drmModeAtomicAddProperty(req, obj_id, prop_mgr_.GetPropertyId(DRMProperty::ROI_V1),
-                           reinterpret_cast<uint64_t>(&roi_v1));
+                           reinterpret_cast<uint64_t>(&roi_v1_));
 #endif
 }
 

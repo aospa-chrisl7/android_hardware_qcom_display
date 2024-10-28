@@ -17,42 +17,6 @@
  * limitations under the License.
  */
 
-/*
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted (subject to the limitations in the
- * disclaimer below) provided that the following conditions are met:
- *
- *    * Redistributions of source code must retain the above copyright
- *      notice, this list of conditions and the following disclaimer.
- *
- *    * Redistributions in binary form must reproduce the above
- *      copyright notice, this list of conditions and the following
- *      disclaimer in the documentation and/or other materials provided
- *      with the distribution.
- *
- *    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *      contributors may be used to endorse or promote products derived
- *      from this software without specific prior written permission.
- *
- * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-
 #ifndef __HWC_DISPLAY_H__
 #define __HWC_DISPLAY_H__
 
@@ -111,6 +75,7 @@ enum {
 enum SecureSessionType {
   kSecureDisplay,
   kSecureCamera,
+  kSecureTUI,
   kSecureMax,
 };
 
@@ -130,50 +95,60 @@ struct TransientRefreshRateInfo {
 
 class HWCColorMode {
  public:
+  HWCColorMode(){};
   explicit HWCColorMode(DisplayInterface *display_intf);
-  ~HWCColorMode() {}
-  HWC2::Error Init();
-  HWC2::Error DeInit();
-  void Dump(std::ostringstream* os);
-  uint32_t GetColorModeCount();
-  uint32_t GetRenderIntentCount(ColorMode mode);
-  HWC2::Error GetColorModes(uint32_t *out_num_modes, ColorMode *out_modes);
-  HWC2::Error GetRenderIntents(ColorMode mode, uint32_t *out_num_intents, RenderIntent *out_modes);
+  virtual ~HWCColorMode() {}
+  virtual HWC2::Error Init();
+  virtual HWC2::Error DeInit();
+  virtual void Dump(std::ostringstream *os);
+  virtual uint32_t GetColorModeCount();
+  virtual uint32_t GetRenderIntentCount(ColorMode mode);
+  virtual HWC2::Error GetColorModes(uint32_t *out_num_modes, ColorMode *out_modes);
+  virtual HWC2::Error GetRenderIntents(ColorMode mode, uint32_t *out_num_intents,
+                                       RenderIntent *out_modes);
   HWC2::Error SetColorModeWithRenderIntent(ColorMode mode, RenderIntent intent);
   HWC2::Error SetColorModeById(int32_t color_mode_id);
   HWC2::Error SetColorModeFromClientApi(std::string mode_string);
-  HWC2::Error SetColorTransform(const float *matrix, android_color_transform_t hint);
-  HWC2::Error RestoreColorTransform();
-  ColorMode GetCurrentColorMode() { return current_color_mode_; }
-  HWC2::Error ApplyCurrentColorModeWithRenderIntent(bool hdr_present);
-  HWC2::Error CacheColorModeWithRenderIntent(ColorMode mode, RenderIntent intent);
+  virtual HWC2::Error SetColorTransform(const float *matrix, android_color_transform_t hint);
+  virtual HWC2::Error RestoreColorTransform();
+  virtual ColorMode GetCurrentColorMode() { return current_color_mode_; }
+  virtual HWC2::Error ApplyCurrentColorModeWithRenderIntent(bool hdr_present);
+  virtual HWC2::Error CacheColorModeWithRenderIntent(ColorMode mode, RenderIntent intent);
+  void ReapplyMode() { apply_mode_ = true; };
+  virtual HWC2::Error NotifyDisplayCalibrationMode(bool in_calibration) {
+    return HWC2::Error::Unsupported;
+  }
 
- private:
-  static const uint32_t kColorTransformMatrixCount = 16;
-  void PopulateColorModes();
+ protected:
   template <class T>
   void CopyColorTransformMatrix(const T *input_matrix, double *output_matrix) {
     for (uint32_t i = 0; i < kColorTransformMatrixCount; i++) {
       output_matrix[i] = static_cast<double>(input_matrix[i]);
     }
   }
-  HWC2::Error ValidateColorModeWithRenderIntent(ColorMode mode, RenderIntent intent);
-  HWC2::Error SetPreferredColorModeInternal(const std::string &mode_string, bool from_client,
-    ColorMode *color_mode, DynamicRangeType *dynamic_range);
 
+  static const uint32_t kColorTransformMatrixCount = 16;
   DisplayInterface *display_intf_ = NULL;
   bool apply_mode_ = false;
   ColorMode current_color_mode_ = ColorMode::NATIVE;
   RenderIntent current_render_intent_ = RenderIntent::COLORIMETRIC;
   DynamicRangeType curr_dynamic_range_ = kSdrType;
-  typedef std::map<DynamicRangeType, std::string> DynamicRangeMap;
-  typedef std::map<RenderIntent, DynamicRangeMap> RenderIntentMap;
-  // Initialize supported mode/render intent/dynamic range combination
-  std::map<ColorMode, RenderIntentMap> color_mode_map_ = {};
+
   double color_matrix_[kColorTransformMatrixCount] = { 1.0, 0.0, 0.0, 0.0, \
                                                        0.0, 1.0, 0.0, 0.0, \
                                                        0.0, 0.0, 1.0, 0.0, \
                                                        0.0, 0.0, 0.0, 1.0 };
+
+ private:
+  void PopulateColorModes();
+  HWC2::Error ValidateColorModeWithRenderIntent(ColorMode mode, RenderIntent intent);
+  HWC2::Error SetPreferredColorModeInternal(const std::string &mode_string, bool from_client,
+                                            ColorMode *color_mode, DynamicRangeType *dynamic_range);
+
+  typedef std::map<DynamicRangeType, std::string> DynamicRangeMap;
+  typedef std::map<RenderIntent, DynamicRangeMap> RenderIntentMap;
+  // Initialize supported mode/render intent/dynamic range combination
+  std::map<ColorMode, RenderIntentMap> color_mode_map_ = {};
   std::map<ColorMode, DynamicRangeMap> preferred_mode_ = {};
 };
 
@@ -183,8 +158,8 @@ class HWCDisplay : public DisplayEventHandler {
     kDisplayStatusInvalid = -1,
     kDisplayStatusOffline,
     kDisplayStatusOnline,
-    kDisplayStatusPause,
-    kDisplayStatusResume,
+    kDisplayStatusPause,       // Pause + PowerOff
+    kDisplayStatusResume,      // Resume + PowerOn
   };
 
   enum DisplayValidateState {
@@ -199,6 +174,11 @@ class HWCDisplay : public DisplayEventHandler {
     std::multiset<HWCLayer *, SortLayersByZ> layer_set;  // Maintain a set sorted by Z
   };
 
+  enum DisplayCommitState {
+    kNormalCommit,
+    kInternalCommit,
+  };
+
   virtual ~HWCDisplay() {}
   virtual int Init();
   virtual int Deinit();
@@ -206,7 +186,7 @@ class HWCDisplay : public DisplayEventHandler {
   // Framebuffer configurations
   virtual void SetIdleTimeoutMs(uint32_t timeout_ms, uint32_t inactive_ms);
   virtual HWC2::Error SetFrameDumpConfig(uint32_t count, uint32_t bit_mask_layer_type,
-                                         int32_t format, bool post_processed);
+                                         int32_t format, const CwbConfig &cwb_config);
   virtual DisplayError SetMaxMixerStages(uint32_t max_mixer_stages);
   virtual DisplayError ControlPartialUpdate(bool enable, uint32_t *pending) {
     return kErrorNotSupported;
@@ -219,19 +199,24 @@ class HWCDisplay : public DisplayEventHandler {
   virtual int Perform(uint32_t operation, ...);
   virtual int HandleSecureSession(const std::bitset<kSecureMax> &secure_sessions,
                                   bool *power_on_pending, bool is_active_secure_display);
-  virtual int GetActiveSecureSession(std::bitset<kSecureMax> *secure_sessions);
+  virtual DisplayError HandleSecureEvent(SecureEvent secure_event, bool *needs_refresh);
+  virtual int GetActiveSecureSession(std::bitset<kSecureMax> *secure_sessions) { return 0; };
   virtual DisplayError SetMixerResolution(uint32_t width, uint32_t height);
   virtual DisplayError GetMixerResolution(uint32_t *width, uint32_t *height);
   virtual void GetPanelResolution(uint32_t *width, uint32_t *height);
+  virtual void GetRealPanelResolution(uint32_t *width, uint32_t *height);
   virtual void Dump(std::ostringstream *os);
-  virtual DisplayError TeardownConcurrentWriteback(void) {
+  virtual int GetCwbBufferResolution(CwbTapPoint cwb_tappoint, uint32_t *x_pixels,
+                                     uint32_t *y_pixels);
+  virtual DisplayError TeardownConcurrentWriteback(bool *needs_refresh);
+  virtual DisplayError TeardownCwbForVirtualDisplay(void) {
     return kErrorNotSupported;
   }
 
   // Captures frame output in the buffer specified by output_buffer_info. The API is
   // non-blocking and the client is expected to check operation status later on.
   // Returns -1 if the input is invalid.
-  virtual int FrameCaptureAsync(const BufferInfo &output_buffer_info, bool post_processed) {
+  virtual int FrameCaptureAsync(const BufferInfo &output_buffer_info, const CwbConfig &cwb_config) {
     return -1;
   }
   // Returns the status of frame capture operation requested with FrameCaptureAsync().
@@ -244,8 +229,8 @@ class HWCDisplay : public DisplayEventHandler {
     return kErrorNotSupported;
   }
   virtual HWC2::Error SetReadbackBuffer(const native_handle_t *buffer,
-                                        shared_ptr<Fence> acquire_fence,
-                                        bool post_processed_output, CWBClient client) {
+                                        shared_ptr<Fence> acquire_fence, CwbConfig cwb_config,
+                                        CWBClient client) {
     return HWC2::Error::Unsupported;
   }
   virtual HWC2::Error GetReadbackBufferFence(shared_ptr<Fence> *release_fence) {
@@ -269,11 +254,12 @@ class HWCDisplay : public DisplayEventHandler {
     return false;
   }
 
+  virtual void SetCpuPerfHintLargeCompCycle() {};
+
   virtual bool VsyncEnablePending() {
     return false;
   }
 
-  virtual void SetCpuPerfHintLargeCompCycle() {};
   // Display Configurations
   static uint32_t GetThrottlingRefreshRate() { return HWCDisplay::throttling_refresh_rate_; }
   static void SetThrottlingRefreshRate(uint32_t newRefreshRate)
@@ -283,17 +269,12 @@ class HWCDisplay : public DisplayEventHandler {
   virtual int GetDisplayConfigCount(uint32_t *count);
   virtual int GetDisplayAttributesForConfig(int config,
                                             DisplayConfigVariableInfo *display_attributes);
+  virtual int GetSupportedDisplayRefreshRates(std::vector<uint32_t> *supported_refresh_rates);
+  bool IsModeSwitchAllowed(uint32_t config);
+
   virtual int SetState(bool connected) {
     return kErrorNotSupported;
   }
-  virtual DisplayError SetStandByMode(bool enable, bool is_twm) {
-    return kErrorNotSupported;
-  }
-
-  virtual DisplayError DelayFirstCommit() {
-    return kErrorNotSupported;
-  }
-
   virtual DisplayError Flush() {
     return kErrorNotSupported;
   }
@@ -420,7 +401,8 @@ class HWCDisplay : public DisplayEventHandler {
     validated_ = false;
     return HWC2::Error::None;
   }
-  virtual HWC2::Error GetValidateDisplayOutput(uint32_t *out_num_types, uint32_t *out_num_requests);
+  virtual HWC2::Error PresentAndOrGetValidateDisplayOutput(uint32_t *out_num_types,
+                                                           uint32_t *out_num_requests);
   virtual bool IsDisplayCommandMode();
   virtual HWC2::Error SetQSyncMode(QSyncMode qsync_mode) {
     return HWC2::Error::Unsupported;
@@ -463,19 +445,21 @@ class HWCDisplay : public DisplayEventHandler {
       uint64_t *samples[NUM_HISTOGRAM_COLOR_COMPONENTS]);
 
   virtual HWC2::Error GetDisplayVsyncPeriod(VsyncPeriodNanos *vsync_period);
-  virtual HWC2::Error SetDisplayVsyncPeriod(VsyncPeriodNanos vsync_period) {
-    return HWC2::Error::None;
-  }
-
-
   virtual HWC2::Error SetActiveConfigWithConstraints(
       hwc2_config_t config, const VsyncPeriodChangeConstraints *vsync_period_change_constraints,
       VsyncPeriodChangeTimeline *out_timeline);
 
   HWC2::Error SetDisplayElapseTime(uint64_t time);
-  virtual bool HasReadBackBufferSupport() { return false; }
   virtual bool IsDisplayIdle() { return false; };
+  virtual bool HasReadBackBufferSupport() { return false; }
+  virtual HWC2::Error NotifyDisplayCalibrationMode(bool in_calibration) {
+    return HWC2::Error::Unsupported;
+  };
   virtual HWC2::Error GetClientTargetProperty(ClientTargetProperty *out_client_target_property);
+  virtual void GetConfigInfo(std::map<uint32_t, DisplayConfigVariableInfo> *variable_config_map,
+                             int *active_config_index, uint32_t *num_configs);
+  virtual void SetConfigInfo(std::map<uint32_t, DisplayConfigVariableInfo>& variable_config_map,
+                             int active_config_index, uint32_t num_configs) {};
 
  protected:
   static uint32_t throttling_refresh_rate_;
@@ -528,6 +512,7 @@ class HWCDisplay : public DisplayEventHandler {
   HWC2::Error GetCachedActiveConfig(hwc2_config_t *config);
   void SetActiveConfigIndex(int active_config_index);
   int GetActiveConfigIndex();
+  DisplayError ValidateTUITransition (SecureEvent secure_event);
 
   bool validated_ = false;
   bool layer_stack_invalid_ = true;
@@ -583,7 +568,8 @@ class HWCDisplay : public DisplayEventHandler {
   bool client_connected_ = true;
   bool pending_config_ = false;
   bool has_client_composition_ = false;
-  bool smart_panel_config_ = false;
+  LayerRect window_rect_ = {};
+  bool windowed_display_ = false;
   uint32_t vsyncs_to_apply_rate_change_ = 1;
   hwc2_config_t pending_refresh_rate_config_ = UINT_MAX;
   int64_t pending_refresh_rate_refresh_time_ = INT64_MAX;
@@ -592,16 +578,18 @@ class HWCDisplay : public DisplayEventHandler {
   std::mutex transient_refresh_rate_lock_;
   std::mutex active_config_lock_;
   int active_config_index_ = -1;
-  LayerRect window_rect_ = {};
-  bool windowed_display_ = false;
   uint32_t active_refresh_rate_ = 0;
+  SecureEvent secure_event_ = kSecureEventMax;
+  bool display_pause_pending_ = false;
+  bool display_idle_ = false;
   bool animating_ = false;
+  DisplayValidateState validate_state_ = kNormalValidate;
+  DisplayCommitState commit_state_ = kNormalCommit;
+  bool revalidate_pending_ = false;
   buffer_handle_t client_target_handle_ = 0;
   shared_ptr<Fence> client_acquire_fence_ = nullptr;
   int32_t client_dataspace_ = 0;
   hwc_region_t client_damage_region_ = {};
-  bool display_idle_ = false;
-  bool enable_poms_during_doze_ = false;
 
  private:
   void DumpInputBuffers(void);
@@ -614,7 +602,6 @@ class HWCDisplay : public DisplayEventHandler {
   uint32_t geometry_changes_ = GeometryChanges::kNone;
   uint32_t geometry_changes_on_doze_suspend_ = GeometryChanges::kNone;
   int null_display_mode_ = 0;
-  DisplayValidateState validate_state_ = kNormalValidate;
   bool fast_path_enabled_ = true;
   bool first_cycle_ = true;  // false if a display commit has succeeded on the device.
   shared_ptr<Fence> fbt_release_fence_ = nullptr;

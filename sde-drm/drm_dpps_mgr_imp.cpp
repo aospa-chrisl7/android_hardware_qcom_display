@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2019-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -313,6 +313,9 @@ void DRMDppsManagerImp::Init(int fd, drmModeRes* res) {
   dpps_feature_[kFeatureLtmHistEvent] = DRMDppsPropInfo{1, DRMProperty::INVALID, 0, true /* is_event */};
   dpps_feature_[kFeatureLtmWbPbEvent] = DRMDppsPropInfo{1, DRMProperty::INVALID, 0, true /* is_event */};
   dpps_feature_[kFeatureLtmOffEvent] = DRMDppsPropInfo{1, DRMProperty::INVALID, 0, true /* is_event */};
+
+  ltm_buffers_ctrl_map_.reserve(MAX_DISPLAY_COUNT);
+  ltm_buffers_map_.reserve(MAX_DISPLAY_COUNT);
 }
 
 void DRMDppsManagerImp::CacheDppsFeature(uint32_t obj_id, va_list args) {
@@ -387,15 +390,18 @@ void DRMDppsManagerImp::CommitDppsFeatures(drmModeAtomicReq *req, const DRMDispl
           if (ret == -EALREADY) {
             DRM_LOGI("Duplicated request to set event 0x%x, object_id %u, object_type 0x%x, enable %d",
                       event_req.event, event_req.object_id, info.object_type, info.enable);
+          } else if (ret == -ENOENT || ret == -ENODEV || ret == -EACCES) {
+            DRM_LOGW("Event 0x%x, object_id %u, object_type 0x%x, enable %d, ret %d",
+                      event_req.event, event_req.object_id, info.object_type, info.enable, ret);
           } else {
             DRM_LOGE("Failed to set event 0x%x, object_id %u, object_type 0x%x, enable %d, ret %d",
                       event_req.event, event_req.object_id, info.object_type, info.enable, ret);
           }
         }
-        if (ret != -ENODEV)
-          it = dpps_dirty_event_.erase(it);
-        else
+        if (ret == -ENODEV || ret == -ENOENT || ret == -EACCES)
           it++;
+        else
+          it = dpps_dirty_event_.erase(it);
       } else {
         it++;
       }

@@ -149,6 +149,7 @@ enum HWTopology {
   kQuadLMMerge,
   kQuadLMDSCMerge,
   kQuadLMMergeDSC,
+  kQuadLMDSC4HSMerge,
   kPPSplit,
 };
 
@@ -202,6 +203,14 @@ enum class HWRecoveryEvent : uint32_t {
   kSuccess,            // driver succeeded recovery
   kCapture,            // driver PP_TIMEOUT, capture logs
   kDisplayPowerReset,  // driver requesting display power cycle
+};
+
+enum HWPowerState {
+  kPowerStateNone,
+  kPowerStateOff,
+  kPowerStateOn,
+  kPowerStateDoze,
+  kPowerStateDozeSuspend,
 };
 
 typedef std::map<HWSubBlockType, std::vector<LayerBufferFormat>> FormatsMap;
@@ -301,6 +310,7 @@ struct HWResourceInfo {
   uint64_t max_bandwidth_high = 0;
   uint32_t max_mixer_width = 2048;
   uint32_t max_pipe_width = 2048;
+  uint32_t max_pipe_width_dma = 2048;
   uint32_t max_scaler_pipe_width = 2560;
   uint32_t max_rotation_pipe_width = 1088;
   uint32_t max_cursor_size = 0;
@@ -322,6 +332,7 @@ struct HWResourceInfo {
   bool separate_rotator = false;
   bool has_qseed3 = false;
   bool has_concurrent_writeback = false;
+  std::vector<CwbTapPoint> tap_points = {};
   bool has_ppp = false;
   bool has_excl_rect = false;
   uint32_t writeback_index = kHWBlockMax;
@@ -413,6 +424,7 @@ struct HWPanelInfo {
   HWColorPrimaries primaries = {};    // WRGB color primaries
   HWPanelOrientation panel_orientation = {};  // Panel Orientation
   uint32_t transfer_time_us = 0;       // transfer time in micro seconds to panel's active region
+  uint32_t allowed_mode_switch = 0;    // Allowed mode switch bit mask
   bool qsync_support = false;          // Specifies panel supports qsync feature or not.
   bool dyn_bitclk_support = false;     // Bit clk can be updated to avoid RF interference.
   std::vector<uint64_t> bitclk_rates;  // Supported bit clk levels.
@@ -434,6 +446,7 @@ struct HWPanelInfo {
             (left_roi_count != panel_info.left_roi_count) ||
             (right_roi_count != panel_info.right_roi_count) ||
             (transfer_time_us != panel_info.transfer_time_us) ||
+            (allowed_mode_switch != panel_info.allowed_mode_switch) ||
             (qsync_support != panel_info.qsync_support) ||
             (dyn_bitclk_support != panel_info.dyn_bitclk_support) ||
             (bitclk_rates != panel_info.bitclk_rates));
@@ -715,9 +728,15 @@ struct HWLayersInfo {
   bool game_present = false;  // Indicates there is game layer or not
   bool rc_config = false;
   RCLayersInfo rc_layers_info = {};
+  CwbConfig *hw_cwb_config = NULL;     //!< Struct that contains CWB configuration passed to
+                                       //!< driver by SDM.
+  bool spr_enable = false;
+  uint64_t rc_pu_flag_status = 0;
+  bool rc_pu_needs_full_roi = false;
 };
 
 struct HWQosData {
+  bool valid = false;
   uint64_t core_ab_bps = 0;
   uint64_t core_ib_bps = 0;
   uint64_t llcc_ab_bps = 0;

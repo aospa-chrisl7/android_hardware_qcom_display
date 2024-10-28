@@ -1,4 +1,4 @@
-/* Copyright (c) 2021, The Linux Foundataion. All rights reserved.
+/* Copyright (c) 2020, The Linux Foundataion. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -33,15 +33,24 @@
 #include <memory>
 #include <string>
 
+#include "spr_intf.h"
 #include "panel_feature_property_intf.h"
 #include "rc_intf.h"
 
 namespace sdm {
 
+struct SPRInputConfig {
+  std::string panel_name = {};
+  uint32_t panel_xres = 0;
+  uint32_t panel_yres = 0;
+};
+
 class PanelFeatureFactoryIntf {
  public:
   virtual ~PanelFeatureFactoryIntf() {}
 
+  virtual std::shared_ptr<SPRIntf>
+    CreateSPRIntf(const SPRInputConfig &input_cfg, PanelFeaturePropertyIntf *prop_intf) = 0;
   virtual std::unique_ptr<RCIntf> CreateRCIntf(const RCInputConfig &input_cfg,
                                                PanelFeaturePropertyIntf *prop_intf) = 0;
 };

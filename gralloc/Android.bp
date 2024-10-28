@@ -14,7 +14,6 @@ cc_library_shared {
 
     header_libs: [
         "display_headers",
-        "qti_kernel_headers",
     ],
     shared_libs: [
         "libqdMetaData",
@@ -29,6 +28,8 @@ cc_library_shared {
         "-DLOG_TAG=\"qdgralloc\"",
         "-D__QTI_DISPLAY_GRALLOC__",
         "-Wno-sign-conversion",
+        "-Wno-unused-parameter",
+        "-Wno-unused-variable",
     ],
     srcs: [
         "gr_utils.cpp",
@@ -47,7 +48,6 @@ cc_library_shared {
     vendor: true,
     header_libs: [
         "display_headers",
-        "qti_kernel_headers",
     ],
     include_dirs: [
         "system/memory/libion/include",
@@ -69,33 +69,13 @@ cc_library_shared {
         "-DLOG_TAG=\"qdgralloc\"",
         "-D__QTI_DISPLAY_GRALLOC__",
         "-Wno-sign-conversion",
+        "-Wno-unused-parameter",
     ],
     srcs: [
         "gr_allocator.cpp",
         "gr_buf_mgr.cpp",
         "gr_ion_alloc.cpp",
     ],
-}
-
-//libgralloc
-cc_library_shared {
-    name: "libgralloc.qti",
-    vendor: true,
-    cflags: [
-        "-Wno-sign-conversion",
-        "-DLOG_TAG=\"qtigralloc\"",
-    ],
-    shared_libs: [
-         "liblog",
-         "libcutils",
-         "libutils",
-         "libgralloctypes",
-         "libhidlbase",
-         "libhardware",
-         "android.hardware.graphics.mapper@4.0",
-    ],
-    srcs: ["QtiGralloc.cpp"],
-    header_libs: ["display_intf_headers"],
 }
 
 //mapper3
@@ -121,6 +101,7 @@ cc_library_shared {
         "android.hardware.graphics.mapper@2.1",
         "vendor.qti.hardware.display.mapperextensions@1.1",
         "android.hardware.graphics.mapper@3.0",
+        "vendor.qti.hardware.display.mapperextensions@1.2",
     ],
     cflags: [
         "-DLOG_TAG=\"qdgralloc\"",
@@ -132,6 +113,29 @@ cc_library_shared {
         "QtiMapperExtensions.cpp",
     ],
     vintf_fragments: ["android.hardware.graphics.mapper-impl-qti-display.xml"],
+}
+
+//libgralloc
+cc_library_shared {
+    name: "libgralloc.qti",
+    vendor: true,
+    cflags: [
+        "-Wno-sign-conversion",
+        "-DLOG_TAG=\"qtigralloc\"",
+    ],
+    shared_libs: [
+         "liblog",
+         "libcutils",
+         "libutils",
+         "libgralloctypes",
+         "libhidlbase",
+         "libhardware",
+         "android.hardware.graphics.mapper@4.0",
+    ],
+
+    srcs: ["QtiGralloc.cpp"],
+
+    header_libs: ["display_intf_headers"],
 }
 
 //mapper4
@@ -160,6 +164,7 @@ cc_library_shared {
         "vendor.qti.hardware.display.mapperextensions@1.1",
         "android.hardware.graphics.mapper@3.0",
         "android.hardware.graphics.mapper@4.0",
+        "vendor.qti.hardware.display.mapperextensions@1.2",
     ],
     cflags: [
         "-DLOG_TAG=\"qdgralloc\"",
@@ -200,6 +205,7 @@ cc_binary {
         "android.hardware.graphics.allocator@3.0",
         "vendor.qti.hardware.display.mapperextensions@1.0",
         "vendor.qti.hardware.display.mapperextensions@1.1",
+        "vendor.qti.hardware.display.mapperextensions@1.2",
     ],
     cflags: ["-DLOG_TAG=\"qdgralloc\""],
     srcs: [

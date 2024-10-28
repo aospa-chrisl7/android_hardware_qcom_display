@@ -519,16 +519,6 @@ int HWCDisplay::Init() {
     return -EINVAL;
   }
 
-  bool is_primary_ = display_intf_->IsPrimaryDisplay();
-  if (is_primary_) {
-    int value = 0;
-    HWCDebugHandler::Get()->GetProperty(ENABLE_POMS_DURING_DOZE, &value);
-    enable_poms_during_doze_ = (value == 1);
-    if (enable_poms_during_doze_) {
-      DLOGI("Enable POMS during Doze mode %" PRIu64 , id_);
-    }
-  }
-
   UpdateConfigs();
 
   tone_mapper_ = new HWCToneMapper(buffer_allocator_);
@@ -566,18 +556,11 @@ void HWCDisplay::UpdateConfigs() {
     DisplayConfigVariableInfo info = {};
     GetDisplayAttributesForConfig(INT(i), &info);
     bool config_exists = false;
-
-    if (!smart_panel_config_ && info.smart_panel) {
-      smart_panel_config_ = true;
-    }
-
     for (auto &config : variable_config_map_) {
       if (config.second == info) {
-        if (enable_poms_during_doze_ || (config.second.smart_panel == info.smart_panel)) {
-          config_exists = true;
-          hwc_config_map_.at(i) = config.first;
-          break;
-        }
+        config_exists = true;
+        hwc_config_map_.at(i) = config.first;
+        break;
       }
     }
 
@@ -595,7 +578,7 @@ void HWCDisplay::UpdateConfigs() {
 
   // Update num config count.
   num_configs_ = UINT32(variable_config_map_.size());
-  DLOGI("num_configs = %d smart_panel_config_ = %d", num_configs_, smart_panel_config_);
+  DLOGI("num_configs = %d", num_configs_);
 }
 
 int HWCDisplay::Deinit() {
@@ -699,13 +682,9 @@ void HWCDisplay::BuildLayerStack() {
       layer->flags.solid_fill = true;
     }
 
-#ifdef FOD_ZPOS
+#ifdef UDFPS_ZPOS
     if (hwc_layer->IsFodPressed()) {
       layer->flags.fod_pressed = true;
-      layer_stack_.flags.fod_pressed_present = true;
-    } else {
-      layer->flags.fod_pressed = false;
-      layer_stack_.flags.fod_pressed_present = false;
     }
 #endif
 
@@ -1101,9 +1080,9 @@ HWC2::Error HWCDisplay::GetDisplayAttribute(hwc2_config_t config, HwcAttribute a
 
   DisplayConfigVariableInfo variable_config = variable_config_map_.at(config);
 
-  uint32_t x_pixels = variable_config.x_pixels - UINT32(window_rect_.right + window_rect_.left);
-  uint32_t y_pixels = variable_config.y_pixels - UINT32(window_rect_.bottom + window_rect_.top);
-  if (x_pixels <= 0 || y_pixels <= 0) {
+  variable_config.x_pixels -= UINT32(window_rect_.right + window_rect_.left);
+  variable_config.y_pixels -= UINT32(window_rect_.bottom + window_rect_.top);
+  if (variable_config.x_pixels <= 0 || variable_config.y_pixels <= 0) {
     DLOGE("window rects are not within the supported range");
     return HWC2::Error::BadDisplay;
   }
@@ -1113,10 +1092,10 @@ HWC2::Error HWCDisplay::GetDisplayAttribute(hwc2_config_t config, HwcAttribute a
       *out_value = INT32(variable_config.vsync_period_ns);
       break;
     case HwcAttribute::WIDTH:
-      *out_value = INT32(x_pixels);
+      *out_value = INT32(variable_config.x_pixels);
       break;
     case HwcAttribute::HEIGHT:
-      *out_value = INT32(y_pixels);
+      *out_value = INT32(variable_config.y_pixels);
       break;
     case HwcAttribute::DPI_X:
       *out_value = INT32(variable_config.x_dpi * 1000.0f);
@@ -1243,7 +1222,6 @@ HWC2::Error HWCDisplay::SetClientTarget(buffer_handle_t target, shared_ptr<Fence
   sdm_layer->frame_rate = std::min(current_refresh_rate_, HWCDisplay::GetThrottlingRefreshRate());
   client_target_->SetLayerSurfaceDamage(damage);
   client_target_->SetLayerBuffer(target, acquire_fence);
-  client_target_->SetLayerDataspace(dataspace);
   client_target_handle_ = target;
   client_acquire_fence_ = acquire_fence;
   client_dataspace_     = dataspace;
@@ -1268,6 +1246,10 @@ HWC2::Error HWCDisplay::SetActiveConfig(hwc2_config_t config) {
   GetActiveConfig(&current_config);
   if (current_config == config) {
     return HWC2::Error::None;
+  }
+
+  if (!IsModeSwitchAllowed(config)) {
+    return HWC2::Error::BadConfig;
   }
 
   // DRM driver expects DRM_PREFERRED_MODE to be set as part of first commit.
@@ -1308,7 +1290,7 @@ DisplayError HWCDisplay::SetMixerResolution(uint32_t width, uint32_t height) {
 }
 
 HWC2::Error HWCDisplay::SetFrameDumpConfig(uint32_t count, uint32_t bit_mask_layer_type,
-                                           int32_t format, bool post_processed) {
+                                           int32_t format, const CwbConfig &cwb_config) {
   dump_frame_count_ = count;
   dump_frame_index_ = 0;
   dump_input_layers_ = ((bit_mask_layer_type & (1 << INPUT_LAYER_DUMP)) != 0);
@@ -1395,7 +1377,11 @@ DisplayError HWCDisplay::HandleEvent(DisplayEvent event) {
       }
     } break;
     case kInvalidateDisplay:
-      validated_ = false;
+      if (layer_stack_.block_on_fb) {
+        validated_ = false;
+      } else {
+        revalidate_pending_ = true;
+      }
       break;
     case kPostIdleTimeout:
       display_idle_ = true;
@@ -1505,6 +1491,11 @@ HWC2::Error HWCDisplay::AcceptDisplayChanges() {
       DLOGW("Invalid layer: %" PRIu64, change.first);
     }
   }
+
+  // Clear layer changes, so that they don't get applied in next commit ie;
+  // cases where Prepare doesn't go through.
+  layer_changes_.clear();
+
   return HWC2::Error::None;
 }
 
@@ -1614,22 +1605,33 @@ HWC2::Error HWCDisplay::GetHdrCapabilities(uint32_t *out_num_types, int32_t *out
 
   uint32_t num_types = 0;
   if (fixed_info.hdr_plus_supported) {
+#ifdef TARGET_SUPPORTS_DOLBY_VISION
+    num_types = UINT32(Hdr::HDR10_PLUS);
+  } else {
+    num_types = UINT32(Hdr::HLG);
+  }
+
+  // We support DOLBY_VISION, HDR10, HLG and HDR10_PLUS.
+#else
     num_types = UINT32(Hdr::HDR10_PLUS) - 1;
   } else {
     num_types = UINT32(Hdr::HLG) - 1;
   }
 
   // We support HDR10, HLG and HDR10_PLUS.
+#endif /* TARGET_SUPPORTS_DOLBY_VISION */
   if (out_types == nullptr) {
     *out_num_types = num_types;
   } else {
     uint32_t max_out_types = std::min(*out_num_types, num_types);
     int32_t type = static_cast<int32_t>(Hdr::DOLBY_VISION);
     for (int32_t i = 0; i < max_out_types; i++) {
+#ifndef TARGET_SUPPORTS_DOLBY_VISION
       while (type == static_cast<int32_t>(Hdr::DOLBY_VISION) /* Skip list */) {
         // Skip the type
         type++;
       }
+#endif /* TARGET_SUPPORTS_DOLBY_VISION */
       if (type > (num_types + 1)) {
         break;
       }
@@ -1771,6 +1773,16 @@ HWC2::Error HWCDisplay::PostCommitLayerStack(shared_ptr<Fence> *out_retire_fence
   flush_ = false;
   skip_commit_ = false;
 
+  if (display_pause_pending_) {
+    DLOGI("Pause display %d-%d", sdm_id_, type_);
+    display_paused_ = true;
+    display_pause_pending_ = false;
+  }
+  if (secure_event_ == kTUITransitionEnd || secure_event_ == kSecureDisplayEnd ||
+      secure_event_ == kTUITransitionUnPrepare) {
+    secure_event_ = kSecureEventMax;
+  }
+
   // Handle pending config changes.
   if (pending_first_commit_config_) {
     DLOGI("Changing active config to %d", UINT32(pending_first_commit_config_));
@@ -1835,8 +1847,8 @@ void HWCDisplay::DumpInputBuffers() {
     }
 
     if (!pvt_handle->base) {
-      DisplayError error = buffer_allocator_->MapBuffer(pvt_handle, nullptr);
-      if (error != kErrorNone) {
+      int error = buffer_allocator_->MapBuffer(pvt_handle, nullptr);
+      if (error != 0) {
         DLOGE("Failed to map buffer, error = %d", error);
         continue;
       }
@@ -1856,8 +1868,8 @@ void HWCDisplay::DumpInputBuffers() {
     }
 
     int release_fence = -1;
-    DisplayError error = buffer_allocator_->UnmapBuffer(pvt_handle, &release_fence);
-    if (error != kErrorNone) {
+    int error = buffer_allocator_->UnmapBuffer(pvt_handle, &release_fence);
+    if (error != 0) {
       DLOGE("Failed to unmap buffer, error = %d", error);
       continue;
     }
@@ -2033,6 +2045,17 @@ void HWCDisplay::GetPanelResolution(uint32_t *x_pixels, uint32_t *y_pixels) {
 
   display_intf_->GetActiveConfig(&active_index);
   display_intf_->GetConfig(active_index, &display_config);
+
+  *x_pixels = display_config.x_pixels;
+  *y_pixels = display_config.y_pixels;
+}
+
+void HWCDisplay::GetRealPanelResolution(uint32_t *x_pixels, uint32_t *y_pixels) {
+  DisplayConfigVariableInfo display_config;
+  uint32_t active_index = 0;
+
+  display_intf_->GetActiveConfig(&active_index);
+  display_intf_->GetRealConfig(active_index, &display_config);
 
   *x_pixels = display_config.x_pixels;
   *y_pixels = display_config.y_pixels;
@@ -2250,23 +2273,6 @@ int HWCDisplay::HandleSecureSession(const std::bitset<kSecureMax> &secure_sessio
   return 0;
 }
 
-int HWCDisplay::GetActiveSecureSession(std::bitset<kSecureMax> *secure_sessions) {
-  if (!secure_sessions) {
-    return -1;
-  }
-  secure_sessions->reset();
-  for (auto hwc_layer : layer_set_) {
-    Layer *layer = hwc_layer->GetSDMLayer();
-    if (layer->input_buffer.flags.secure_camera) {
-      secure_sessions->set(kSecureCamera);
-    }
-    if (layer->input_buffer.flags.secure_display) {
-      secure_sessions->set(kSecureDisplay);
-    }
-  }
-  return 0;
-}
-
 int HWCDisplay::SetActiveDisplayConfig(uint32_t config) {
   uint32_t current_config = 0;
   display_intf_->GetActiveConfig(&current_config);
@@ -2298,6 +2304,39 @@ int HWCDisplay::GetDisplayAttributesForConfig(int config,
   return display_intf_->GetConfig(UINT32(config), display_attributes) == kErrorNone ? 0 : -1;
 }
 
+int HWCDisplay::GetSupportedDisplayRefreshRates(std::vector<uint32_t> *supported_refresh_rates) {
+  if (!supported_refresh_rates) {
+    return -1;
+  }
+
+  hwc2_config_t active_config = 0;
+  GetActiveConfig(&active_config);
+
+  int32_t config_group, active_config_group;
+  auto error = GetDisplayAttribute(active_config, HwcAttribute::CONFIG_GROUP, &active_config_group);
+  if (error != HWC2::Error::None) {
+    DLOGE("Failed to get config group of active config");
+    return -1;
+  }
+
+  supported_refresh_rates->resize(0);
+  for (auto &config : variable_config_map_) {
+    error = GetDisplayAttribute(config.first, HwcAttribute::CONFIG_GROUP, &config_group);
+    if (error != HWC2::Error::None) {
+      DLOGE("Failed to get config group for config index: %u", config.first);
+      return -1;
+    }
+    if (active_config_group == config_group) {
+      DisplayConfigVariableInfo const &config_info = config.second;
+      supported_refresh_rates->push_back(config_info.fps);
+    }
+  }
+
+  DLOGI("Count of supported refresh rates = %u for active config group = %d",
+        UINT32(supported_refresh_rates->size()), active_config_group);
+  return 0;
+}
+
 uint32_t HWCDisplay::GetUpdatingLayersCount(void) {
   uint32_t updating_count = 0;
 
@@ -2319,7 +2358,7 @@ bool HWCDisplay::IsLayerUpdating(HWCLayer *hwc_layer) {
   //   c) layer stack geometry has changed (TODO(user): Remove when SDM accepts
   //      geometry_changed as bit fields).
   return (layer->flags.single_buffer || hwc_layer->IsSurfaceUpdated() ||
-          geometry_changes_);
+          hwc_layer->GetGeometryChanges());
 }
 
 uint32_t HWCDisplay::SanitizeRefreshRate(uint32_t req_refresh_rate) {
@@ -2352,7 +2391,7 @@ void HWCDisplay::Dump(std::ostringstream *os) {
     *os << "layer: " << std::setw(4) << layer->GetId();
     *os << " z: " << layer->GetZ();
     *os << " composition: " <<
-          to_string(layer->GetClientRequestedCompositionType()).c_str();
+          to_string(layer->GetOrigClientRequestedCompositionType()).c_str();
     *os << "/" <<
           to_string(layer->GetDeviceSelectedCompositionType()).c_str();
     *os << " alpha: " << std::to_string(sdm_layer->plane_alpha).c_str();
@@ -2435,8 +2474,8 @@ bool HWCDisplay::CanSkipValidate() {
   return true;
 }
 
-HWC2::Error HWCDisplay::GetValidateDisplayOutput(uint32_t *out_num_types,
-                                                 uint32_t *out_num_requests) {
+HWC2::Error HWCDisplay::PresentAndOrGetValidateDisplayOutput(uint32_t *out_num_types,
+                                                             uint32_t *out_num_requests) {
   *out_num_types = UINT32(layer_changes_.size());
   *out_num_requests = UINT32(layer_requests_.size());
 
@@ -2613,6 +2652,24 @@ int32_t HWCDisplay::GetDisplayConfigGroup(DisplayConfigGroupInfo variable_config
   return -1;
 }
 
+bool HWCDisplay::IsModeSwitchAllowed(uint32_t config) {
+  DisplayError error = kErrorNone;
+  uint32_t allowed_mode_switch = 0;
+
+  error = display_intf_->IsSupportedOnDisplay(kSupportedModeSwitch, &allowed_mode_switch);
+  if (error != kErrorNone) {
+    DLOGW("Unable to retrieve supported modes for the current device configuration.");
+  }
+
+  if (allowed_mode_switch == 0 || (allowed_mode_switch & (1 << config))) {
+    DLOGV_IF(kTagClient, "Allowed to switch to mode:%d", config);
+    return true;
+  }
+
+  DLOGW("Not allowed to switch to mode:%d", config);
+  return false;
+}
+
 HWC2::Error HWCDisplay::GetDisplayVsyncPeriod(VsyncPeriodNanos *vsync_period) {
   if (GetTransientVsyncPeriod(vsync_period)) {
     return HWC2::Error::None;
@@ -2626,8 +2683,13 @@ HWC2::Error HWCDisplay::SetActiveConfigWithConstraints(
     VsyncPeriodChangeTimeline *out_timeline) {
   DTRACE_SCOPED();
 
+
   if (variable_config_map_.find(config) == variable_config_map_.end()) {
     DLOGE("Invalid config: %d", config);
+    return HWC2::Error::BadConfig;
+  }
+
+  if (!IsModeSwitchAllowed(config)) {
     return HWC2::Error::BadConfig;
   }
 
@@ -2825,6 +2887,11 @@ HWC2::Error HWCDisplay::SubmitDisplayConfig(hwc2_config_t config) {
   SetActiveConfigIndex(config);
   DLOGI("Active configuration changed to: %d", config);
 
+  // Cache refresh rate set by client.
+  DisplayConfigVariableInfo info = {};
+  GetDisplayAttributesForConfig(INT(config), &info);
+  active_refresh_rate_ = info.fps;
+
   return HWC2::Error::None;
 }
 
@@ -2846,6 +2913,100 @@ void HWCDisplay::SetActiveConfigIndex(int index) {
 int HWCDisplay::GetActiveConfigIndex() {
   std::lock_guard<std::mutex> lock(active_config_lock_);
   return active_config_index_;
+}
+
+DisplayError HWCDisplay::ValidateTUITransition (SecureEvent secure_event) {
+  switch (secure_event) {
+    case kTUITransitionPrepare:
+      if (secure_event_ != kSecureEventMax) {
+        DLOGE("Invalid TUI transition from %d to %d", secure_event_, secure_event);
+        return kErrorParameters;
+      }
+      break;
+    case kTUITransitionUnPrepare:
+      if (secure_event_ != kTUITransitionPrepare) {
+        DLOGE("Invalid TUI transition from %d to %d", secure_event_, secure_event);
+        return kErrorParameters;
+      }
+      break;
+    case kTUITransitionStart:
+      if (secure_event_ != kSecureEventMax) {
+        DLOGE("Invalid TUI transition from %d to %d", secure_event_, secure_event);
+        return kErrorParameters;
+      }
+      break;
+    case kTUITransitionEnd:
+      if (secure_event_ != kTUITransitionStart) {
+        DLOGE("Invalid TUI transition from %d to %d", secure_event_, secure_event);
+        return kErrorParameters;
+      }
+      break;
+    default:
+      DLOGE("Invalid secure event %d", secure_event);
+      return kErrorParameters;
+  }
+  return kErrorNone;
+}
+
+DisplayError HWCDisplay::HandleSecureEvent(SecureEvent secure_event, bool *needs_refresh) {
+  if (secure_event == secure_event_) {
+    return kErrorNone;
+  }
+
+  DisplayError err = ValidateTUITransition(secure_event);
+  if (err != kErrorNone) {
+    return err;
+  }
+
+  err = display_intf_->HandleSecureEvent(secure_event, needs_refresh);
+  if (err != kErrorNone) {
+    DLOGE("Handle secure event failed");
+    return err;
+  }
+
+  if (secure_event == kTUITransitionEnd)
+    color_mode_->ReapplyMode();
+
+  if (secure_event == kTUITransitionEnd || secure_event == kTUITransitionUnPrepare) {
+    DLOGI("Resume display %d-%d",  sdm_id_, type_);
+    display_paused_ = false;
+    if (*needs_refresh) {
+      validated_ = false;
+    }
+  } else if (secure_event == kTUITransitionPrepare || secure_event == kTUITransitionStart) {
+    if (*needs_refresh) {
+      validated_ = false;
+      display_pause_pending_ = true;
+    } else {
+      DLOGI("Pause display %d-%d", sdm_id_, type_);
+      display_paused_ = true;
+    }
+  }
+
+  secure_event_ = secure_event;
+
+  return kErrorNone;
+}
+
+int HWCDisplay::GetCwbBufferResolution(CwbTapPoint cwb_tappoint, uint32_t *x_pixels,
+                                       uint32_t *y_pixels) {
+  if (!x_pixels || !y_pixels) {
+    return -1;
+  }
+  DisplayError ret = display_intf_->GetCwbBufferResolution(cwb_tappoint, x_pixels, y_pixels);
+  if (ret != kErrorNone) {
+    DLOGE("Failed to get Output buffer resolution.");
+    return -1;
+  }
+  return 0;
+}
+
+DisplayError HWCDisplay::TeardownConcurrentWriteback(bool *needs_refresh) {
+  if (!needs_refresh) {
+    return kErrorParameters;
+  }
+  *needs_refresh = false;
+  return kErrorNone;
 }
 
 HWC2::Error HWCDisplay::GetClientTargetProperty(ClientTargetProperty *out_client_target_property) {
@@ -2876,6 +3037,13 @@ HWC2::Error HWCDisplay::GetClientTargetProperty(ClientTargetProperty *out_client
       (android::hardware::graphics::common::V1_2::PixelFormat)format;
 
   return HWC2::Error::None;
+}
+
+void HWCDisplay::GetConfigInfo(std::map<uint32_t, DisplayConfigVariableInfo> *variable_config_map,
+                               int *active_config_index, uint32_t *num_configs) {
+  *variable_config_map = variable_config_map_;
+  *active_config_index = active_config_index_;
+  *num_configs = num_configs_;
 }
 
 } //namespace sdm

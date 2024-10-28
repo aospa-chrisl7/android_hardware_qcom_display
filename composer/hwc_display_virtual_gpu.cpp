@@ -30,7 +30,7 @@
 /*
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -184,20 +184,17 @@ HWC2::Error HWCDisplayVirtualGPU::Present(shared_ptr<Fence> *out_retire_fence) {
     return HWC2::Error::NoResources;
   }
 
-  if (active_secure_sessions_.any() || layer_set_.empty()) {
-    return status;
-  }
   Layer *sdm_layer = client_target_->GetSDMLayer();
   LayerBuffer &input_buffer = sdm_layer->input_buffer;
   if (!input_buffer.buffer_id) {
     return HWC2::Error::NoResources;
   }
 
+  if (NeedsGPUBypass()) {
+    return status;
+  }
 
   layer_stack_.output_buffer = &output_buffer_;
-  if (display_paused_) {
-    validated_ = false;
-  }
 
   // Ensure that blit is initialized.
   // GPU context gets in secure or non-secure mode depending on output buffer provided.

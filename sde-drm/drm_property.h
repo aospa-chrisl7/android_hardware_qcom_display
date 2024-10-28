@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2019, 2021, The Linux Foundation. All rights reserved.
+* Copyright (c) 2019-2020, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -149,6 +149,7 @@ enum struct DRMProperty {
   SDE_DSPP_ABA_LUT,
   SDE_DSPP_SV_BL_SCALE,
   SDE_DSPP_BL_SCALE,
+  SDE_DSPP_SPR_DITHER_V1,
   CAPTURE_MODE,
   QSYNC_MODE,
   IDLE_PC_STATE,
@@ -167,9 +168,11 @@ enum struct DRMProperty {
   FRAME_TRIGGER,
   COLORSPACE,
   SUPPORTED_COLORSPACES,
-  SDE_SSPP_LAYOUT,
-  DSPP_RC_MASK_V1,
+  CACHE_STATE,
+  VM_REQ_STATE,
   DSPP_CAPABILITIES,
+  SPR_INIT_CFG_V1,
+  DSPP_RC_MASK_V1,
 
   // Insert above
   MAX

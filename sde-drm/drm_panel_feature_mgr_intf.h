@@ -1,4 +1,4 @@
-/* Copyright (c) 2021, The Linux Foundataion. All rights reserved.
+/* Copyright (c) 2020, The Linux Foundataion. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -38,7 +38,7 @@ class DRMPanelFeatureMgrIntf {
  public:
   virtual ~DRMPanelFeatureMgrIntf() {}
   virtual void Init(int fd, drmModeRes* res) = 0;
-  virtual void DeInit() = 0;
+  virtual void Deinit() = 0;
   virtual void GetPanelFeatureInfo(DRMPanelFeatureInfo *info) = 0;
   virtual void CachePanelFeature(const DRMPanelFeatureInfo &info) = 0;
   virtual void CommitPanelFeatures(drmModeAtomicReq *req,

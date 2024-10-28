@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2021, The Linux Foundation. All rights reserved.
 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -86,6 +86,8 @@
 #define ION_SC_PREVIEW_FLAGS (ION_SECURE | ION_FLAG_CP_CAMERA_PREVIEW)
 #endif
 
+#define SIZE_2MB 0x200000
+
 using std::shared_ptr;
 using std::vector;
 
@@ -124,6 +126,12 @@ int Allocator::AllocateMem(AllocData *alloc_data, uint64_t usage, int format) {
 
   // After this point we should have the right heap set, there is no fallback
   GetIonHeapInfo(usage, &alloc_data->heap_id, &alloc_data->alloc_type, &alloc_data->flags);
+
+  #ifndef QMAA
+  if (alloc_data->heap_id == ION_HEAP(ION_DISPLAY_HEAP_ID)) {
+    alloc_data->size = ALIGN(alloc_data->size, SIZE_2MB);
+  }
+  #endif
 
   ret = ion_allocator_->AllocBuffer(alloc_data);
   if (ret >= 0) {
@@ -190,7 +198,10 @@ bool Allocator::CheckForBufferSharing(uint32_t num_descriptors,
     }
 
     // For same format type, find the descriptor with bigger size
-    GetAlignedWidthAndHeight(GetBufferInfo(*descriptors[i]), &alignedw, &alignedh);
+    int err = GetAlignedWidthAndHeight(GetBufferInfo(*descriptors[i]), &alignedw, &alignedh);
+    if (err) {
+      return false;
+    }
     unsigned int size = GetSize(GetBufferInfo(*descriptors[i]), alignedw, alignedh);
     if (max_size < size) {
       *max_index = INT(i);
@@ -221,12 +232,21 @@ void Allocator::GetIonHeapInfo(uint64_t usage, unsigned int *ion_heap_id, unsign
        */
       flags |= UINT(ION_SD_FLAGS);
     } else if (usage & BufferUsage::CAMERA_OUTPUT) {
+      int secure_preview_only = 0;
+      char property[PROPERTY_VALUE_MAX];
+      if (property_get("vendor.gralloc.secure_preview_only", property, NULL) > 0) {
+        secure_preview_only = atoi(property);
+      }
       heap_id = ION_HEAP(SD_HEAP_ID);
       if (usage & GRALLOC_USAGE_PRIVATE_CDSP) {
         flags |= UINT(ION_SECURE | ION_FLAG_CP_CDSP);
       }
       if (usage & BufferUsage::COMPOSER_OVERLAY) {
-        flags |= UINT(ION_SC_PREVIEW_FLAGS);
+        if (secure_preview_only) {  // holi target
+          flags |= UINT(ION_SC_PREVIEW_FLAGS);
+        } else {  // Default
+          flags |= UINT(ION_SC_PREVIEW_FLAGS | ION_SC_FLAGS);
+        }
       } else {
         flags |= UINT(ION_SC_FLAGS);
       }
@@ -237,6 +257,10 @@ void Allocator::GetIonHeapInfo(uint64_t usage, unsigned int *ion_heap_id, unsign
       heap_id = ION_HEAP(CP_HEAP_ID);
       flags |= UINT(ION_CP_FLAGS);
     }
+  } else if (usage & GRALLOC_USAGE_PRIVATE_SECURE_DISPLAY) {
+    // Reuse GRALLOC_USAGE_PRIVATE_SECURE_DISPLAY with no GRALLOC_USAGE_PROTECTED flag to alocate
+    // memory from non secure CMA for tursted UI use case
+    heap_id = ION_HEAP(ION_DISPLAY_HEAP_ID);
   }
 
   if (usage & BufferUsage::SENSOR_DIRECT_DATA) {

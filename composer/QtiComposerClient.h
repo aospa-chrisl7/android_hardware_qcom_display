@@ -20,6 +20,11 @@
 #ifndef __QTICOMPOSERCLIENT_H__
 #define __QTICOMPOSERCLIENT_H__
 
+#define QTI_LOGE(format, ...) \
+  ALOGE("%s:" format, __FUNCTION__, ##__VA_ARGS__)
+#define QTI_LOGW(format, ...) \
+  ALOGW("%s:" format, __FUNCTION__, ##__VA_ARGS__)
+
 #include <vendor/qti/hardware/display/composer/3.0/IQtiComposerClient.h>
 #include <hidl/MQDescriptor.h>
 #include <hidl/Status.h>
@@ -49,7 +54,6 @@ namespace composer_V2_2 = ::android::hardware::graphics::composer::V2_2;
 namespace composer_V2_3 = ::android::hardware::graphics::composer::V2_3;
 namespace composer_V2_4 = ::android::hardware::graphics::composer::V2_4;
 
-using DisplayCapability_V2_3 = composer_V2_3::IComposerClient::DisplayCapability;
 using PerFrameMetadataKey_V2 = composer_V2_2::IComposerClient::PerFrameMetadataKey;
 using PerFrameMetadataKey = composer_V2_3::IComposerClient::PerFrameMetadataKey;
 
@@ -257,6 +261,7 @@ class QtiComposerClient : public IQtiComposerClient {
   }
 
  private:
+  Error checkIfValidDisplay(uint64_t display);
   struct LayerBuffers {
     std::vector<BufferCacheEntry> Buffers;
     // the handle is a sideband stream handle, not a buffer handle

@@ -27,13 +27,49 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+* * Redistributions of source code must retain the above copyright
+* notice, this list of conditions and the following disclaimer.
+*
+* * Redistributions in binary form must reproduce the above
+* copyright notice, this list of conditions and the following
+* disclaimer in the documentation and/or other materials provided
+* with the distribution.
+*
+* * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+* contributors may be used to endorse or promote products derived
+* from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #include <dlfcn.h>
 #include <drm/drm_fourcc.h>
 #include <drm_lib_loader.h>
 #include <drm_master.h>
 #include <drm_res_mgr.h>
 #include <fcntl.h>
-#include <media/msm_sde_rotator.h>
+#include <display/media/msm_sde_rotator.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +87,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <set>
 
 #include "hw_info_drm.h"
 
@@ -74,6 +111,8 @@ using sde_drm::DRMPlanesInfo;
 using sde_drm::DRMCrtcInfo;
 using sde_drm::DRMPlaneType;
 using sde_drm::DRMTonemapLutType;
+using sde_drm::DRMPanelFeatureInfo;
+using sde_drm::DRMCWbCaptureMode;
 
 using std::vector;
 using std::map;
@@ -244,6 +283,11 @@ DisplayError HWInfoDRM::GetHWResourceInfo(HWResourceInfo *hw_resource) {
   DLOGI("Has UBWC = %d", hw_resource->has_ubwc);
   DLOGI("Has Micro Idle = %d", hw_resource->has_micro_idle);
   DLOGI("Has Concurrent Writeback = %d", hw_resource->has_concurrent_writeback);
+  string tap_points = "Tap Points: ";
+  for (CwbTapPoint &tap_point : hw_resource->tap_points) {
+    tap_points += std::to_string(tap_point) + " ";
+  }
+  DLOGI("%s", tap_points.c_str());
   DLOGI("Has Src Tonemap = %lx", hw_resource->src_tone_map.to_ulong());
   DLOGI("Max Low Bw = %" PRIu64 "", hw_resource->dyn_bw_info.total_bw_limit[kBwVFEOn]);
   DLOGI("Max High Bw = %" PRIu64 "", hw_resource->dyn_bw_info.total_bw_limit[kBwVFEOff]);
@@ -333,6 +377,9 @@ void HWInfoDRM::GetSystemInfo(HWResourceInfo *hw_resource) {
   hw_resource->min_prefill_lines = info.min_prefill_lines;
   hw_resource->secure_disp_blend_stage = info.secure_disp_blend_stage;
   hw_resource->has_concurrent_writeback = info.concurrent_writeback;
+  for (DRMCWbCaptureMode &tappt : info.tap_points) {
+    hw_resource->tap_points.push_back(static_cast<CwbTapPoint>(tappt));
+  }
   hw_resource->line_width_constraints_count = info.line_width_constraints_count;
   if (info.line_width_constraints_count) {
     auto &width_constraints = hw_resource->line_width_constraints;
@@ -401,6 +448,7 @@ void HWInfoDRM::GetHWPlanesInfo(HWResourceInfo *hw_resource) {
         name = "DMA";
         pipe_caps.type = kPipeTypeDMA;
         if (!hw_resource->num_dma_pipe) {
+          hw_resource->max_pipe_width_dma = pipe_obj.second.max_linewidth;
           PopulateSupportedFmts(kHWDMAPipe, pipe_obj.second, hw_resource);
           PopulatePipeBWCaps(pipe_obj.second, hw_resource);
         }
@@ -795,8 +843,24 @@ void HWInfoDRM::GetSDMFormat(uint32_t drm_format, uint64_t drm_format_modifier,
 }
 
 DisplayError HWInfoDRM::GetFirstDisplayInterfaceType(HWDisplayInterfaceInfo *hw_disp_info) {
-  hw_disp_info->type = kBuiltIn;
-  hw_disp_info->is_connected = true;
+  HWDisplaysInfo hw_displays_info = {};
+
+  DisplayError error = GetDisplaysStatus(&hw_displays_info);
+  if (error != kErrorNone) {
+    DLOGE("Failed to get connected display list. Error = %d", error);
+    return error;
+  }
+
+  for (auto &iter : hw_displays_info) {
+    auto &info = iter.second;
+    if (info.is_primary) {
+      hw_disp_info->type = info.display_type;
+      hw_disp_info->is_connected = info.is_connected;
+      DLOGI("Primary display: %d-%d, connected: %s", info.display_id,
+            info.display_type, info.is_connected ? "true" : "false");
+      break;
+    }
+  }
 
   return kErrorNone;
 }
@@ -828,6 +892,7 @@ DisplayError HWInfoDRM::GetDisplaysStatus(HWDisplaysInfo *hw_displays_info) {
         ((0 == iter.first) || (iter.first > INT32_MAX)) ? -1 : (int32_t)(iter.first);
     switch (iter.second.type) {
       case DRM_MODE_CONNECTOR_DSI:
+      case DRM_MODE_CONNECTOR_eDP:
         hw_info.display_type = kBuiltIn;
         break;
       case DRM_MODE_CONNECTOR_TV:
@@ -882,6 +947,7 @@ DisplayError HWInfoDRM::GetMaxDisplaysSupported(const DisplayType type, int32_t 
     return kErrorUndefined;
   }
 
+  int conn_type = -1;
   int32_t max_displays_builtin = 0;
   int32_t max_displays_tmds = 0;
   int32_t max_displays_virtual = 0;
@@ -892,7 +958,16 @@ DisplayError HWInfoDRM::GetMaxDisplaysSupported(const DisplayType type, int32_t 
         max_displays_builtin++;
         break;
       case DRM_MODE_ENCODER_TMDS:
-        max_displays_tmds++;
+        // TMDS encoder can be eDP or DisplayPort connector
+        // count eDP as builtin display while DisplayPort as pluggable display.
+        conn_type = GetConnectorTypeforTMDS(iter.first, iter.second);
+        if (conn_type == -1) {
+          return kErrorUndefined;
+        } else if (conn_type == DRM_MODE_CONNECTOR_eDP) {
+          max_displays_builtin++;
+        } else {
+          max_displays_tmds++;
+        }
         break;
       case DRM_MODE_ENCODER_VIRTUAL:
         max_displays_virtual++;
@@ -939,4 +1014,30 @@ DisplayError HWInfoDRM::GetMaxDisplaysSupported(const DisplayType type, int32_t 
   return kErrorNone;
 }
 
+int HWInfoDRM::GetConnectorTypeforTMDS(uint32_t encoder_id, sde_drm::DRMEncoderInfo info) {
+  sde_drm::DRMConnectorsInfo conns_info = {};
+  int drm_err = drm_mgr_intf_->GetConnectorsInfo(&conns_info);
+  if (drm_err) {
+    DLOGE("DRM Driver error %d while getting max displays' supported", drm_err);
+    return -1;
+  }
+
+  for (auto &conn : conns_info) {
+    sde_drm::DRMConnectorInfo &info = conn.second;
+    if (info.type == DRM_MODE_CONNECTOR_eDP) {
+      std::set<uint32_t> possible_encoders;
+      drm_err = drm_mgr_intf_->GetPossibleEncoders(conn.first, &possible_encoders);
+      if (drm_err) {
+        DLOGE("DRM Driver error %d while retrieving possible encoders for connector %d",
+               drm_err, conn.first);
+        return -1;
+      }
+      if (possible_encoders.find(encoder_id) != possible_encoders.end()) {
+        return DRM_MODE_CONNECTOR_eDP;
+      }
+    }
+  }
+
+  return DRM_MODE_CONNECTOR_DisplayPort;
+}
 }  // namespace sdm

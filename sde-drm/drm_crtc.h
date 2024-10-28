@@ -94,6 +94,13 @@ class DRMCrtc {
   std::unique_ptr<DRMPPManager> pp_mgr_{};
   std::unordered_map<uint32_t, uint64_t> tmp_prop_val_map_ {};
   std::unordered_map<uint32_t, uint64_t> committed_prop_val_map_ {};
+#if defined SDE_MAX_DIM_LAYERS
+  sde_drm_dim_layer_v1 drm_dim_layer_v1_ {};
+#endif
+#ifdef SDE_MAX_ROI_V1
+  sde_drm_roi_v1 roi_v1_ {};
+#endif
+  sde_drm_dest_scaler_data dest_scale_data_ = {};
 };
 
 class DRMCrtcManager {

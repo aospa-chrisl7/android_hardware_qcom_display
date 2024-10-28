@@ -1,4 +1,4 @@
-/* Copyright (c) 2021, The Linux Foundataion. All rights reserved.
+/* Copyright (c) 2020, The Linux Foundataion. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -43,7 +43,7 @@ class DRMPanelFeatureMgr : public DRMPanelFeatureMgrIntf {
  public:
   virtual ~DRMPanelFeatureMgr() {}
   void Init(int fd, drmModeRes* res);
-  void DeInit();
+  void Deinit();
   void GetPanelFeatureInfo(DRMPanelFeatureInfo *info);
   void CachePanelFeature(const DRMPanelFeatureInfo &info);
   void CommitPanelFeatures(drmModeAtomicReq *req, const DRMDisplayToken &tok);
@@ -64,28 +64,6 @@ class DRMPanelFeatureMgr : public DRMPanelFeatureMgrIntf {
   std::map<DRMPanelFeatureID, DRMPropType> drm_prop_type_map_ {};
   std::map<DRMPanelFeatureID, uint32_t> drm_prop_blob_ids_map_ {};
   std::array<DRMPanelFeatureInfo, kDRMPanelFeatureMax> feature_info_tbl_ {};
-};
-
-/*
-Below structure is required for cross compatibility between
-different kernel versions.
-This structure needs to be in sync with kernel structure.
-*/
-
-#define RC_DATA_SIZE_MAX   2720
-#define RC_CFG_SIZE_MAX       4
-
-struct msm_rc_mask_cfg {
-  __u64 flags;
-  __u32 cfg_param_01;
-  __u32 cfg_param_02;
-  __u32 cfg_param_03;
-  __u32 cfg_param_04[RC_CFG_SIZE_MAX];
-  __u32 cfg_param_05[RC_CFG_SIZE_MAX];
-  __u32 cfg_param_06[RC_CFG_SIZE_MAX];
-  __u64 cfg_param_07;
-  __u32 cfg_param_08;
-  __u64 cfg_param_09[RC_DATA_SIZE_MAX];
 };
 
 }  // namespace sde_drm

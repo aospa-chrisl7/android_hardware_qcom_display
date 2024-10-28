@@ -20,7 +20,9 @@
 * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
 * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*
+*/
+
+/*
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
 * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
@@ -60,7 +62,8 @@
 #include <utils/debug.h>
 #include <utils/rect.h>
 #include <utils/utils.h>
-
+#include <utils/formats.h>
+#include <iomanip>
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -68,9 +71,7 @@
 #include <vector>
 
 #include "display_builtin.h"
-#ifndef TARGET_HEADLESS
 #include "drm_interface.h"
-#endif
 #include "drm_master.h"
 #include "hw_info_interface.h"
 #include "hw_interface.h"
@@ -80,15 +81,17 @@
 namespace sdm {
 
 DisplayBuiltIn::DisplayBuiltIn(DisplayEventHandler *event_handler, HWInfoInterface *hw_info_intf,
-                               BufferAllocator *buffer_allocator, CompManager *comp_manager)
-  : DisplayBase(kBuiltIn, event_handler, kDeviceBuiltIn, buffer_allocator,
-                comp_manager, hw_info_intf) {}
+                               BufferAllocator *buffer_allocator, CompManager *comp_manager,
+                               std::shared_ptr<IPCIntf> ipc_intf)
+  : DisplayBase(kBuiltIn, event_handler, kDeviceBuiltIn, buffer_allocator, comp_manager,
+                hw_info_intf), ipc_intf_(ipc_intf) {}
 
 DisplayBuiltIn::DisplayBuiltIn(int32_t display_id, DisplayEventHandler *event_handler,
                                HWInfoInterface *hw_info_intf,
-                               BufferAllocator *buffer_allocator, CompManager *comp_manager)
-  : DisplayBase(display_id, kBuiltIn, event_handler, kDeviceBuiltIn,
-                buffer_allocator, comp_manager, hw_info_intf) {}
+                               BufferAllocator *buffer_allocator, CompManager *comp_manager,
+                               std::shared_ptr<IPCIntf> ipc_intf)
+  : DisplayBase(display_id, kBuiltIn, event_handler, kDeviceBuiltIn, buffer_allocator, comp_manager,
+                hw_info_intf), ipc_intf_(ipc_intf) {}
 
 DisplayBuiltIn::~DisplayBuiltIn() {
 }
@@ -117,6 +120,10 @@ DisplayError DisplayBuiltIn::Init() {
     return error;
   }
 
+  if (color_mgr_) {
+    color_mgr_->ColorMgrGetStcModes(&stc_color_modes_);
+  }
+
   if (hw_panel_info_.mode == kModeCommand && Debug::IsVideoModeEnabled()) {
     error = hw_intf_->SetDisplayMode(kModeVideo);
     if (error != kErrorNone) {
@@ -124,21 +131,24 @@ DisplayError DisplayBuiltIn::Init() {
             kModeVideo);
     }
   }
-
+#ifdef TRUSTED_VM
+  event_list_ = {HWEvent::VSYNC, HWEvent::EXIT, HWEvent::PINGPONG_TIMEOUT, HWEvent::PANEL_DEAD,
+                 HWEvent::HW_RECOVERY};
+#else
   if (hw_panel_info_.mode == kModeCommand) {
     event_list_ = {HWEvent::VSYNC, HWEvent::EXIT,
                    /*HWEvent::IDLE_NOTIFY, */
                    HWEvent::SHOW_BLANK_EVENT, HWEvent::THERMAL_LEVEL, HWEvent::IDLE_POWER_COLLAPSE,
                    HWEvent::PINGPONG_TIMEOUT, HWEvent::PANEL_DEAD, HWEvent::HW_RECOVERY,
-                   HWEvent::HISTOGRAM};
+                   HWEvent::HISTOGRAM, HWEvent::BACKLIGHT_EVENT};
   } else {
     event_list_ = {HWEvent::VSYNC,         HWEvent::EXIT,
                    HWEvent::IDLE_NOTIFY,   HWEvent::SHOW_BLANK_EVENT,
                    HWEvent::THERMAL_LEVEL, HWEvent::PINGPONG_TIMEOUT,
                    HWEvent::PANEL_DEAD,    HWEvent::HW_RECOVERY,
-                   HWEvent::HISTOGRAM};
+                   HWEvent::HISTOGRAM,     HWEvent::BACKLIGHT_EVENT};
   }
-
+#endif
   avr_prop_disabled_ = Debug::IsAVRDisabled();
 
   error = HWEventsInterface::Create(display_id_, kBuiltIn, this, event_list_, hw_intf_,
@@ -161,7 +171,11 @@ DisplayError DisplayBuiltIn::Init() {
   Debug::Get()->GetProperty(DEFER_FPS_FRAME_COUNT, &value);
   deferred_config_.frame_count = (value > 0) ? UINT32(value) : 0;
 
-error = CreatePanelfeatures();
+  spr_prop_value_ = 0;
+  // Enable SPR as default is disabled.
+  Debug::GetProperty(ENABLE_SPR, &spr_prop_value_);
+
+  error = CreatePanelfeatures();
   if (error != kErrorNone) {
     DLOGE("Failed to setup panel feature factory, error: %d", error);
   } else {
@@ -176,23 +190,25 @@ error = CreatePanelfeatures();
   disable_dyn_fps_ = (value == 1);
 
   value = 0;
-  DebugHandler::Get()->GetProperty(ENHANCE_IDLE_TIME, &value);
-  enhance_idle_time_ = (value == 1);
-
-  value = 0;
   DebugHandler::Get()->GetProperty(ENABLE_QSYNC_IDLE, &value);
   enable_qsync_idle_ = hw_panel_info_.qsync_support && (value == 1);
   if (enable_qsync_idle_) {
     DLOGI("Enabling qsync on idling");
   }
 
+  value = 0;
+  DebugHandler::Get()->GetProperty(ENHANCE_IDLE_TIME, &value);
+  enhance_idle_time_ = (value == 1);
+
   return error;
 }
 
 DisplayError DisplayBuiltIn::Deinit() {
-  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  {
+    lock_guard<recursive_mutex> obj(recursive_mutex_);
 
-  dpps_info_.Deinit();
+    dpps_info_.Deinit();
+  }
   return DisplayBase::Deinit();
 }
 
@@ -257,10 +273,31 @@ DisplayError DisplayBuiltIn::Prepare(LayerStack *layer_stack) {
   // Clean hw layers for reuse.
   hw_layers_ = HWLayers();
 
+  error = ConfigureCwb(layer_stack);
+  if (error != kErrorNone) {
+    return error;
+  }
+
   UpdateQsyncMode();
 
   left_frame_roi_ = {};
   right_frame_roi_ = {};
+
+  if (spr_) {
+    GenericPayload out;
+    uint32_t *enable = nullptr;
+    int ret = out.CreatePayload<uint32_t>(enable);
+    if (ret) {
+      DLOGE("Failed to create the payload. Error:%d", ret);
+      return kErrorUndefined;
+    }
+    ret = spr_->GetParameter(kSPRFeatureEnable, &out);
+    if (ret) {
+      DLOGE("Failed to get the spr status. Error:%d", ret);
+      return kErrorUndefined;
+    }
+    spr_enable_ = *enable;
+  }
 
   error = DisplayBase::Prepare(layer_stack);
 
@@ -276,7 +313,7 @@ DisplayError DisplayBuiltIn::Prepare(LayerStack *layer_stack) {
 }
 
 void DisplayBuiltIn::UpdateQsyncMode() {
-  if (!hw_panel_info_.qsync_support || (hw_panel_info_.mode == kModeCommand)) {
+  if (!hw_panel_info_.qsync_support) {
     return;
   }
 
@@ -296,7 +333,7 @@ void DisplayBuiltIn::UpdateQsyncMode() {
 
   DLOGV_IF(kTagDisplay, "update: %d mode: %d", hw_layers_.hw_avr_info.update, mode);
 
-  // Store active mode.
+  // Store active mde.
   active_qsync_mode_ = mode;
 }
 
@@ -316,7 +353,6 @@ HWAVRModes DisplayBuiltIn::GetAvrMode(QSyncMode mode) {
 
 void DisplayBuiltIn::initColorSamplingState() {
   samplingState = SamplingState::Off;
-#ifndef TARGET_HEADLESS
   histogramCtrl.object_type = DRM_MODE_OBJECT_CRTC;
   histogramCtrl.feature_id = sde_drm::DRMDPPSFeatureID::kFeatureAbaHistCtrl;
   histogramCtrl.value = sde_drm::HistModes::kHistDisabled;
@@ -325,25 +361,28 @@ void DisplayBuiltIn::initColorSamplingState() {
   histogramIRQ.feature_id = sde_drm::DRMDPPSFeatureID::kFeatureAbaHistIRQ;
   histogramIRQ.value = sde_drm::HistModes::kHistDisabled;
   histogramSetup = true;
-#endif
 }
 
 DisplayError DisplayBuiltIn::setColorSamplingState(SamplingState state) {
   samplingState = state;
-#ifndef TARGET_HEADLESS
   if (samplingState == SamplingState::On) {
     histogramCtrl.value = sde_drm::HistModes::kHistEnabled;
     histogramIRQ.value = sde_drm::HistModes::kHistEnabled;
+    if (hw_panel_info_.mode == kModeCommand) {
+      uint32_t pending;
+      ControlPartialUpdate(false /* enable */, &pending);
+    }
   } else {
     histogramCtrl.value = sde_drm::HistModes::kHistDisabled;
     histogramIRQ.value = sde_drm::HistModes::kHistDisabled;
+    if (hw_panel_info_.mode == kModeCommand) {
+      uint32_t pending;
+      ControlPartialUpdate(true /* enable */, &pending);
+    }
   }
 
   // effectively drmModeAtomicAddProperty for the SDE_DSPP_HIST_CTRL_V1
   return DppsProcessOps(kDppsSetFeature, &histogramCtrl, sizeof(histogramCtrl));
-#else
-  return kErrorNone;
-#endif
 }
 
 DisplayError DisplayBuiltIn::colorSamplingOn() {
@@ -358,6 +397,35 @@ DisplayError DisplayBuiltIn::colorSamplingOff() {
     return kErrorParameters;
   }
   return setColorSamplingState(SamplingState::Off);
+}
+
+DisplayError DisplayBuiltIn::SetupSPR() {
+  SPRInputConfig spr_cfg;
+  spr_cfg.panel_name = std::string(hw_panel_info_.panel_name);
+  spr_ = pf_factory_->CreateSPRIntf(spr_cfg, prop_intf_);
+  if (!spr_ || spr_->Init() != 0) {
+    DLOGE("Failed to initialize SPR");
+    return kErrorResources;
+  }
+
+  return kErrorNone;
+}
+
+DisplayError DisplayBuiltIn::SetupDemura() {
+  return kErrorNone;
+}
+
+DisplayError DisplayBuiltIn::SetupPanelfeatures() {
+  if (!pf_factory_ || !prop_intf_) {
+    DLOGE("Failed to create PanelFeatures");
+    return kErrorResources;
+  }
+
+  DisplayError ret = kErrorNone;
+  if ((ret = SetupSPR()) != kErrorNone) return ret;
+  if ((ret = SetupDemura()) != kErrorNone) return ret;
+
+  return ret;
 }
 
 DisplayError DisplayBuiltIn::Commit(LayerStack *layer_stack) {
@@ -389,30 +457,30 @@ DisplayError DisplayBuiltIn::Commit(LayerStack *layer_stack) {
     }
   }
 
-  if (vsync_enable_) {
-    DTRACE_BEGIN("RegisterVsync");
-    // wait for previous frame's retire fence to signal.
-    Fence::Wait(previous_retire_fence_);
-
-    // Register for vsync and then commit the frame.
-    hw_events_intf_->SetEventState(HWEvent::VSYNC, true);
-    DTRACE_END();
-  }
   // effectively drmModeAtomicAddProperty for SDE_DSPP_HIST_IRQ_V1
   if (histogramSetup) {
-#ifndef TARGET_HEADLESS
     DppsProcessOps(kDppsSetFeature, &histogramIRQ, sizeof(histogramIRQ));
-#endif
   }
 
   error = DisplayBase::Commit(layer_stack);
   if (error != kErrorNone) {
     return error;
   }
+
   if (pending_brightness_) {
     Fence::Wait(layer_stack->retire_fence);
     SetPanelBrightness(cached_brightness_);
     pending_brightness_ = false;
+  } else {
+    if (secure_event_ == kTUITransitionStart) {
+      // Send the panel brightness event to secondary VM on TUI session start
+      SendBacklight();
+    }
+  }
+
+  if (secure_event_ == kTUITransitionStart) {
+    // Send display config information to secondary VM on TUI session start
+    SendDisplayConfigs();
   }
 
   if (commit_event_enabled_) {
@@ -420,6 +488,12 @@ DisplayError DisplayBuiltIn::Commit(LayerStack *layer_stack) {
   }
 
   deferred_config_.UpdateDeferCount();
+
+  if (needs_validate_on_pu_enable_) {
+    // After PU was disabled for one frame, need to revalidate when enabled.
+    event_handler_->HandleEvent(kInvalidateDisplay);
+    needs_validate_on_pu_enable_ = false;
+  }
 
   ReconfigureDisplay();
 
@@ -518,8 +592,16 @@ DisplayError DisplayBuiltIn::SetDisplayState(DisplayState state, bool teardown,
     vsync_enable_ = false;
   }
 
-  if (pending_doze_ || pending_power_on_) {
+  if (pending_power_state_ != kPowerStateNone) {
     event_handler_->Refresh();
+  }
+
+  if (spr_prop_value_ && !panel_feature_init_ && state != kStateOff && state != kStateStandby) {
+    error = SetupPanelfeatures();
+    panel_feature_init_ = true;
+    if (error != kErrorNone) {
+      DLOGE("SetupPanelfeatures failed with error :%d, ignoring!", error);
+    }
   }
 
   return kErrorNone;
@@ -539,7 +621,7 @@ DisplayError DisplayBuiltIn::SetDisplayMode(uint32_t mode) {
     HWDisplayMode hw_display_mode = static_cast<HWDisplayMode>(mode);
     uint32_t pending = 0;
 
-    if (!active_ && !pending_doze_ && !pending_power_on_) {
+    if (!active_) {
       DLOGW("Invalid display state = %d. Panel must be on.", state_);
       return kErrorNotSupported;
     }
@@ -588,10 +670,6 @@ DisplayError DisplayBuiltIn::SetPanelBrightness(float brightness) {
     return kErrorParameters;
   }
 
-  if (state_ == kStateOff) {
-    return kErrorNone;
-  }
-
   // -1.0f = off, 0.0f = min, 1.0f = max
   float level_remainder = 0.0f;
   int level = 0;
@@ -613,7 +691,6 @@ DisplayError DisplayBuiltIn::SetPanelBrightness(float brightness) {
   DisplayError err = hw_intf_->SetPanelBrightness(level);
   if (err == kErrorNone) {
     level_remainder_ = level_remainder;
-    pending_brightness_ = false;
     DLOGI_IF(kTagDisplay, "Setting brightness to level %d (%f percent)", level,
              brightness * 100);
   } else if (err == kErrorDeferred) {
@@ -643,11 +720,6 @@ DisplayError DisplayBuiltIn::GetRefreshRateRange(uint32_t *min_refresh_rate,
   return error;
 }
 
-DisplayError DisplayBuiltIn::TeardownConcurrentWriteback(void) {
-  lock_guard<recursive_mutex> obj(recursive_mutex_);
-
-  return hw_intf_->TeardownConcurrentWriteback();
-}
 
 DisplayError DisplayBuiltIn::SetRefreshRate(uint32_t refresh_rate, bool final_rate,
                                             bool idle_screen) {
@@ -752,6 +824,7 @@ void DisplayBuiltIn::IdleTimeout() {
     }
     handle_idle_timeout_ = true;
     event_handler_->Refresh();
+    hw_intf_->EnableSelfRefresh();
     if (!enhance_idle_time_) {
       lock_guard<recursive_mutex> obj(recursive_mutex_);
       comp_manager_->ProcessIdleTimeout(display_comp_ctx_);
@@ -762,12 +835,6 @@ void DisplayBuiltIn::IdleTimeout() {
 void DisplayBuiltIn::PingPongTimeout() {
   lock_guard<recursive_mutex> obj(recursive_mutex_);
   hw_intf_->DumpDebugData();
-}
-
-void DisplayBuiltIn::ThermalEvent(int64_t thermal_level) {
-  event_handler_->HandleEvent(kThermalEvent);
-  lock_guard<recursive_mutex> obj(recursive_mutex_);
-  comp_manager_->ProcessThermalEvent(display_comp_ctx_, thermal_level);
 }
 
 void DisplayBuiltIn::IdlePowerCollapse() {
@@ -801,6 +868,31 @@ void DisplayBuiltIn::Histogram(int histogram_fd, uint32_t blob_id) {
   event_handler_->HistogramEvent(histogram_fd, blob_id);
 }
 
+void DisplayBuiltIn::HandleBacklightEvent(float brightness_level) {
+  DLOGI("backlight event occurred %f ipc_intf %p", brightness_level, ipc_intf_.get());
+  if (ipc_intf_) {
+    GenericPayload in;
+    IPCBacklightParams *backlight_params = nullptr;
+    int ret = in.CreatePayload<IPCBacklightParams>(backlight_params);
+    if (ret) {
+      DLOGW("failed to create the payload. Error:%d", ret);
+      return;
+    }
+    float brightness = 0.0f;
+    if (GetPanelBrightnessFromLevel(brightness_level, &brightness) != kErrorNone) {
+      return;
+    }
+    backlight_params->brightness = brightness;
+    backlight_params->is_primary = IsPrimaryDisplay();
+    if ((ret = ipc_intf_->SetParameter(kIpcParamSetBacklight, in))) {
+      DLOGW("Failed to set backlight, error = %d", ret);
+    }
+    lock_guard<recursive_mutex> obj(brightness_lock_);
+    cached_brightness_ = brightness;
+    pending_brightness_ = true;
+  }
+}
+
 DisplayError DisplayBuiltIn::GetPanelBrightness(float *brightness) {
   lock_guard<recursive_mutex> obj(brightness_lock_);
 
@@ -809,7 +901,10 @@ DisplayError DisplayBuiltIn::GetPanelBrightness(float *brightness) {
   if ((err = hw_intf_->GetPanelBrightness(&level)) != kErrorNone) {
     return err;
   }
+  return GetPanelBrightnessFromLevel(level, brightness);
+}
 
+DisplayError DisplayBuiltIn::GetPanelBrightnessFromLevel(float level, float *brightness) {
   // -1.0f = off, 0.0f = min, 1.0f = max
   float max = hw_panel_info_.panel_max_brightness;
   float min = hw_panel_info_.panel_min_brightness;
@@ -819,12 +914,11 @@ DisplayError DisplayBuiltIn::GetPanelBrightness(float *brightness) {
     *brightness = (static_cast<float>(level) + level_remainder_ - min) / (max - min);
   } else {
     min >= max ? DLOGE("Minimum brightness is greater than or equal to maximum brightness") :
-                 DLOGE("Invalid brightness level %d", level);
+                 DLOGE("Invalid brightness level %f", level);
     return kErrorDriverData;
   }
 
-
-  DLOGI_IF(kTagDisplay, "Received level %d (%f percent)", level, *brightness * 100);
+  DLOGI_IF(kTagDisplay, "Received level %f (%f percent)", level, *brightness * 100);
 
   return kErrorNone;
 }
@@ -847,12 +941,6 @@ DisplayError DisplayBuiltIn::ControlPartialUpdate(bool enable, uint32_t *pending
   lock_guard<recursive_mutex> obj(recursive_mutex_);
   if (!pending) {
     return kErrorParameters;
-  }
-
-  if (!hw_panel_info_.partial_update) {
-    // Nothing to be done.
-    DLOGI("partial update is not applicable for display id = %d", display_id_);
-    return kErrorNotSupported;
   }
 
   if (dpps_info_.disable_pu_ && enable) {
@@ -881,6 +969,7 @@ DisplayError DisplayBuiltIn::ControlPartialUpdate(bool enable, uint32_t *pending
 DisplayError DisplayBuiltIn::DisablePartialUpdateOneFrame() {
   lock_guard<recursive_mutex> obj(recursive_mutex_);
   disable_pu_one_frame_ = true;
+  needs_validate_on_pu_enable_ = true;
 
   return kErrorNone;
 }
@@ -992,6 +1081,292 @@ DisplayError DisplayBuiltIn::SetFrameTriggerMode(FrameTriggerMode mode) {
   return kErrorNone;
 }
 
+DisplayError DisplayBuiltIn::GetStcColorModes(snapdragoncolor::ColorModeList *mode_list) {
+  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  if (!mode_list) {
+    return kErrorParameters;
+  }
+
+  if (!color_mgr_) {
+    return kErrorNotSupported;
+  }
+
+  mode_list->list = stc_color_modes_.list;
+  return kErrorNone;
+}
+
+DisplayError DisplayBuiltIn::SetStcColorMode(const snapdragoncolor::ColorMode &color_mode) {
+  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  if (!color_mgr_) {
+    return kErrorNotSupported;
+  }
+  DisplayError ret = kErrorNone;
+  PrimariesTransfer blend_space = {};
+  blend_space = GetBlendSpaceFromStcColorMode(color_mode);
+  ret = comp_manager_->SetBlendSpace(display_comp_ctx_, blend_space);
+  if (ret != kErrorNone) {
+    DLOGE("SetBlendSpace failed, ret = %d display_type_ = %d", ret, display_type_);
+  }
+
+  ret = hw_intf_->SetBlendSpace(blend_space);
+  if (ret != kErrorNone) {
+    DLOGE("Failed to pass blend space, ret = %d display_type_ = %d", ret, display_type_);
+  }
+
+  ret = color_mgr_->ColorMgrSetStcMode(color_mode);
+  if (ret != kErrorNone) {
+    DLOGE("Failed to set stc color mode, ret = %d display_type_ = %d", ret, display_type_);
+    return ret;
+  }
+  current_color_mode_ = color_mode;
+
+  DynamicRangeType dynamic_range = kSdrType;
+  if (std::find(color_mode.hw_assets.begin(), color_mode.hw_assets.end(),
+                snapdragoncolor::kPbHdrBlob) != color_mode.hw_assets.end()) {
+    dynamic_range = kHdrType;
+  }
+  if ((color_mode.gamut == ColorPrimaries_BT2020 && color_mode.gamma == Transfer_SMPTE_ST2084) ||
+      (color_mode.gamut == ColorPrimaries_BT2020 && color_mode.gamma == Transfer_HLG)) {
+    dynamic_range = kHdrType;
+  }
+  comp_manager_->ControlDpps(dynamic_range != kHdrType);
+
+  return ret;
+}
+
+DisplayError DisplayBuiltIn::NotifyDisplayCalibrationMode(bool in_calibration) {
+  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  if (!color_mgr_) {
+    return kErrorNotSupported;
+  }
+  DisplayError ret = kErrorNone;
+  ret = color_mgr_->NotifyDisplayCalibrationMode(in_calibration);
+  if (ret != kErrorNone) {
+    DLOGE("Failed to notify QDCM Mode status, ret = %d state = %d", ret, in_calibration);
+  }
+
+  return ret;
+}
+
+std::string DisplayBuiltIn::Dump() {
+  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  HWDisplayAttributes attrib;
+  uint32_t active_index = 0;
+  uint32_t num_modes = 0;
+  std::ostringstream os;
+
+  hw_intf_->GetNumDisplayAttributes(&num_modes);
+  hw_intf_->GetActiveConfig(&active_index);
+  hw_intf_->GetDisplayAttributes(active_index, &attrib);
+
+  os << "device type:" << display_type_;
+  os << "\nstate: " << state_ << " vsync on: " << vsync_enable_
+     << " max. mixer stages: " << max_mixer_stages_;
+  os << "\nnum configs: " << num_modes << " active config index: " << active_index;
+  os << "\nDisplay Attributes:";
+  os << "\n Mode:" << (hw_panel_info_.mode == kModeVideo ? "Video" : "Command");
+  os << std::boolalpha;
+  os << " Primary:" << hw_panel_info_.is_primary_panel;
+  os << " DynFPS:" << hw_panel_info_.dynamic_fps;
+  os << "\n HDR Panel:" << hw_panel_info_.hdr_enabled;
+  os << " QSync:" << hw_panel_info_.qsync_support;
+  os << " DynBitclk:" << hw_panel_info_.dyn_bitclk_support;
+  os << "\n Left Split:" << hw_panel_info_.split_info.left_split
+     << " Right Split:" << hw_panel_info_.split_info.right_split;
+  os << "\n PartialUpdate:" << hw_panel_info_.partial_update;
+  if (hw_panel_info_.partial_update) {
+    os << "\n ROI Min w:" << hw_panel_info_.min_roi_width;
+    os << " Min h:" << hw_panel_info_.min_roi_height;
+    os << " NeedsMerge: " << hw_panel_info_.needs_roi_merge;
+    os << " Alignment: l:" << hw_panel_info_.left_align << " w:" << hw_panel_info_.width_align;
+    os << " t:" << hw_panel_info_.top_align << " b:" << hw_panel_info_.height_align;
+  }
+  os << "\n FPS min:" << hw_panel_info_.min_fps << " max:" << hw_panel_info_.max_fps
+     << " cur:" << display_attributes_.fps;
+  os << " TransferTime: " << hw_panel_info_.transfer_time_us << "us";
+  os << " AllowedModeSwitch: " << hw_panel_info_.allowed_mode_switch;
+  os << " MaxBrightness:" << hw_panel_info_.panel_max_brightness;
+  os << "\n Display WxH: " << display_attributes_.x_pixels << "x" << display_attributes_.y_pixels;
+  os << " MixerWxH: " << mixer_attributes_.width << "x" << mixer_attributes_.height;
+  os << " DPI: " << display_attributes_.x_dpi << "x" << display_attributes_.y_dpi;
+  os << " LM_Split: " << display_attributes_.is_device_split;
+  os << "\n vsync_period " << display_attributes_.vsync_period_ns;
+  os << " v_back_porch: " << display_attributes_.v_back_porch;
+  os << " v_front_porch: " << display_attributes_.v_front_porch;
+  os << " v_pulse_width: " << display_attributes_.v_pulse_width;
+  os << "\n v_total: " << display_attributes_.v_total;
+  os << " h_total: " << display_attributes_.h_total;
+  os << " clk: " << display_attributes_.clock_khz;
+  os << " Topology: " << display_attributes_.topology;
+  os << " Qsync mode: " << active_qsync_mode_;
+  os << std::noboolalpha;
+
+  DynamicRangeType curr_dynamic_range = kSdrType;
+  if (std::find(current_color_mode_.hw_assets.begin(), current_color_mode_.hw_assets.end(),
+                snapdragoncolor::kPbHdrBlob) != current_color_mode_.hw_assets.end()) {
+    curr_dynamic_range = kHdrType;
+  }
+  os << "\nCurrent Color Mode: gamut " << current_color_mode_.gamut << " gamma "
+     << current_color_mode_.gamma << " intent " << current_color_mode_.intent << " Dynamice_range"
+     << (curr_dynamic_range == kSdrType ? " SDR" : " HDR");
+
+  uint32_t num_hw_layers = 0;
+  if (hw_layers_.info.stack) {
+    num_hw_layers = UINT32(hw_layers_.info.hw_layers.size());
+  }
+
+  if (num_hw_layers == 0) {
+    os << "\nNo hardware layers programmed";
+    return os.str();
+  }
+
+  LayerBuffer *out_buffer = hw_layers_.info.stack->output_buffer;
+  if (out_buffer) {
+    os << "\n Output buffer res: " << out_buffer->width << "x" << out_buffer->height
+       << " format: " << GetFormatString(out_buffer->format);
+  }
+  HWLayersInfo &layer_info = hw_layers_.info;
+  for (uint32_t i = 0; i < layer_info.left_frame_roi.size(); i++) {
+    LayerRect &l_roi = layer_info.left_frame_roi.at(i);
+    LayerRect &r_roi = layer_info.right_frame_roi.at(i);
+
+    os << "\nROI(LTRB)#" << i << " LEFT(" << INT(l_roi.left) << " " << INT(l_roi.top) << " " <<
+      INT(l_roi.right) << " " << INT(l_roi.bottom) << ")";
+    if (IsValid(r_roi)) {
+    os << " RIGHT(" << INT(r_roi.left) << " " << INT(r_roi.top) << " " << INT(r_roi.right) << " "
+      << INT(r_roi.bottom) << ")";
+    }
+  }
+
+  LayerRect &fb_roi = layer_info.partial_fb_roi;
+  if (IsValid(fb_roi)) {
+    os << "\nPartial FB ROI(LTRB):(" << INT(fb_roi.left) << " " << INT(fb_roi.top) << " " <<
+      INT(fb_roi.right) << " " << INT(fb_roi.bottom) << ")";
+  }
+
+  const char *header  = "\n| Idx |   Comp Type   |   Split   | Pipe |    W x H    |          Format          |  Src Rect (L T R B) |  Dst Rect (L T R B) |  Z | Pipe Flags | Deci(HxV) | CS | Rng | Tr |";  //NOLINT
+  const char *newline = "\n|-----|---------------|-----------|------|-------------|--------------------------|---------------------|---------------------|----|------------|-----------|----|-----|----|";  //NOLINT
+  const char *format  = "\n| %3s | %13s | %9s | %4d | %4d x %4d | %24s | %4d %4d %4d %4d | %4d %4d %4d %4d | %2s | %10s | %9s | %2s | %3s | %2s |";  //NOLINT
+
+  os << "\n";
+  os << newline;
+  os << header;
+  os << newline;
+
+  for (uint32_t i = 0; i < num_hw_layers; i++) {
+    uint32_t layer_index = hw_layers_.info.index.at(i);
+    // sdm-layer from client layer stack
+    Layer *sdm_layer = hw_layers_.info.stack->layers.at(layer_index);
+    // hw-layer from hw layers info
+    Layer &hw_layer = hw_layers_.info.hw_layers.at(i);
+    LayerBuffer *input_buffer = &hw_layer.input_buffer;
+    HWLayerConfig &layer_config = hw_layers_.config[i];
+    HWRotatorSession &hw_rotator_session = layer_config.hw_rotator_session;
+
+    const char *comp_type = GetName(sdm_layer->composition);
+    const char *buffer_format = GetFormatString(input_buffer->format);
+    const char *pipe_split[2] = { "Pipe-1", "Pipe-2" };
+    const char *rot_pipe[2] = { "Rot-inl-1", "Rot-inl-2" };
+    char idx[8];
+
+    snprintf(idx, sizeof(idx), "%d", layer_index);
+
+    for (uint32_t count = 0; count < hw_rotator_session.hw_block_count; count++) {
+      char row[1024];
+      HWRotateInfo &rotate = hw_rotator_session.hw_rotate_info[count];
+      LayerRect &src_roi = rotate.src_roi;
+      LayerRect &dst_roi = rotate.dst_roi;
+      char rot[12] = { 0 };
+
+      snprintf(rot, sizeof(rot), "Rot-%s-%d", layer_config.use_inline_rot ?
+               "inl" : "off", count + 1);
+
+      snprintf(row, sizeof(row), format, idx, comp_type, rot,
+               0, input_buffer->width, input_buffer->height, buffer_format,
+               INT(src_roi.left), INT(src_roi.top), INT(src_roi.right), INT(src_roi.bottom),
+               INT(dst_roi.left), INT(dst_roi.top), INT(dst_roi.right), INT(dst_roi.bottom),
+               "-", "-    ", "-    ", "-", "-", "-");
+      os << row;
+      // print the below only once per layer block, fill with spaces for rest.
+      idx[0] = 0;
+      comp_type = "";
+    }
+
+    if (hw_rotator_session.hw_block_count > 0) {
+      input_buffer = &hw_rotator_session.output_buffer;
+      buffer_format = GetFormatString(input_buffer->format);
+    }
+
+    if (layer_config.use_solidfill_stage) {
+      LayerRect src_roi = layer_config.hw_solidfill_stage.roi;
+      const char *decimation = "";
+      char flags[16] = { 0 };
+      char z_order[8] = { 0 };
+      const char *color_primary = "";
+      const char *range = "";
+      const char *transfer = "";
+      char row[1024] = { 0 };
+
+      snprintf(z_order, sizeof(z_order), "%d", layer_config.hw_solidfill_stage.z_order);
+      snprintf(flags, sizeof(flags), "0x%08x", hw_layer.flags.flags);
+      snprintf(row, sizeof(row), format, idx, comp_type, pipe_split[0],
+               0, INT(src_roi.right), INT(src_roi.bottom),
+               buffer_format, INT(src_roi.left), INT(src_roi.top),
+               INT(src_roi.right), INT(src_roi.bottom), INT(src_roi.left),
+               INT(src_roi.top), INT(src_roi.right), INT(src_roi.bottom),
+               z_order, flags, decimation, color_primary, range, transfer);
+      os << row;
+      continue;
+    }
+
+    for (uint32_t count = 0; count < 2; count++) {
+      char decimation[16] = { 0 };
+      char flags[16] = { 0 };
+      char z_order[8] = { 0 };
+      char color_primary[8] = { 0 };
+      char range[8] = { 0 };
+      char transfer[8] = { 0 };
+      bool rot = layer_config.use_inline_rot;
+
+      HWPipeInfo &pipe = (count == 0) ? layer_config.left_pipe : layer_config.right_pipe;
+
+      if (!pipe.valid) {
+        continue;
+      }
+
+      LayerRect src_roi = pipe.src_roi;
+      LayerRect &dst_roi = pipe.dst_roi;
+
+      snprintf(z_order, sizeof(z_order), "%d", pipe.z_order);
+      snprintf(flags, sizeof(flags), "0x%08x", pipe.flags);
+      snprintf(decimation, sizeof(decimation), "%3d x %3d", pipe.horizontal_decimation,
+               pipe.vertical_decimation);
+      ColorMetaData &color_metadata = hw_layer.input_buffer.color_metadata;
+      snprintf(color_primary, sizeof(color_primary), "%d", color_metadata.colorPrimaries);
+      snprintf(range, sizeof(range), "%d", color_metadata.range);
+      snprintf(transfer, sizeof(transfer), "%d", color_metadata.transfer);
+
+      char row[1024];
+      snprintf(row, sizeof(row), format, idx, comp_type, rot ? rot_pipe[count] : pipe_split[count],
+               pipe.pipe_id, input_buffer->width, input_buffer->height,
+               buffer_format, INT(src_roi.left), INT(src_roi.top),
+               INT(src_roi.right), INT(src_roi.bottom), INT(dst_roi.left),
+               INT(dst_roi.top), INT(dst_roi.right), INT(dst_roi.bottom),
+               z_order, flags, decimation, color_primary, range, transfer);
+
+      os << row;
+      // print the below only once per layer block, fill with spaces for rest.
+      idx[0] = 0;
+      comp_type = "";
+    }
+  }
+
+  os << newline << "\n";
+
+  return os.str();
+}
+
+
 DppsInterface* DppsInfo::dpps_intf_ = NULL;
 std::vector<int32_t> DppsInfo::display_id_ = {};
 
@@ -1064,17 +1439,6 @@ void DppsInfo::DppsNotifyOps(enum DppsNotifyOps op, void *payload, size_t size) 
     DLOGE("DppsNotifyOps op %d error %d", op, ret);
 }
 
-DisplayError DisplayBuiltIn::HandleSecureEvent(SecureEvent secure_event, LayerStack *layer_stack) {
-  hw_layers_.info.stack = layer_stack;
-  DisplayError err = hw_intf_->HandleSecureEvent(secure_event, &hw_layers_);
-  if (err != kErrorNone) {
-    return err;
-  }
-  comp_manager_->HandleSecureEvent(display_comp_ctx_, secure_event);
-
-  return kErrorNone;
-}
-
 DisplayError DisplayBuiltIn::GetQSyncMode(QSyncMode *qsync_mode) {
   *qsync_mode = active_qsync_mode_;
   return kErrorNone;
@@ -1082,15 +1446,22 @@ DisplayError DisplayBuiltIn::GetQSyncMode(QSyncMode *qsync_mode) {
 
 DisplayError DisplayBuiltIn::SetQSyncMode(QSyncMode qsync_mode) {
   lock_guard<recursive_mutex> obj(recursive_mutex_);
-  if (!hw_panel_info_.qsync_support || qsync_mode_ == qsync_mode || first_cycle_) {
-    DLOGE("Failed: qsync_support: %d first_cycle %d mode: %d -> %d", hw_panel_info_.qsync_support,
-          first_cycle_, qsync_mode_, qsync_mode);
+
+  if (!hw_panel_info_.qsync_support || first_cycle_) {
+    DLOGE("Failed: qsync_support: %d first_cycle %d", hw_panel_info_.qsync_support,
+          first_cycle_);
     return kErrorNotSupported;
+  }
+
+  if (qsync_mode_ == qsync_mode) {
+    DLOGW("Qsync mode already set as requested mode: qsync_mode_=%d", qsync_mode_);
+    return kErrorNone;
   }
 
   qsync_mode_ = qsync_mode;
   needs_avr_update_ = true;
   event_handler_->Refresh();
+  DLOGI("Qsync mode set to %d successfully", qsync_mode_);
 
   return kErrorNone;
 }
@@ -1148,40 +1519,6 @@ DisplayError DisplayBuiltIn::GetDynamicDSIClock(uint64_t *bit_clk_rate) {
   }
 
   return hw_intf_->GetDynamicDSIClock(bit_clk_rate);
-}
-
-void DisplayBuiltIn::ResetPanel() {
-  DisplayError status = kErrorNone;
-  shared_ptr<Fence> release_fence = nullptr;
-  DisplayState last_display_state = {};
-
-  GetDisplayState(&last_display_state);
-  DLOGI("Power off display id = %d", display_id_);
-
-  status = SetDisplayState(kStateOff, true /* teardown */, &release_fence);
-  if (status != kErrorNone) {
-    DLOGE("Power off for display id = %d failed with error = %d", display_id_, status);
-  }
-
-  DLOGI("Set display %d to state = %d", display_id_, last_display_state);
-  status = SetDisplayState(last_display_state, false /* teardown */, &release_fence);
-  if (status != kErrorNone) {
-     DLOGE("%d state for display id = %d failed with error = %d", last_display_state, display_id_,
-           status);
-  }
-
-  // If panel does not support color modes, do not set color mode.
-  if (color_mode_map_.size() > 0) {
-    status = SetColorMode(current_color_mode_);
-    if (status != kErrorNone) {
-      DLOGE("SetColorMode failed for display id = %d error = %d", display_id_, status);
-    }
-  }
-
-  status = SetVSyncState(true);
-  if (status != kErrorNone) {
-    DLOGE("Enable vsync failed for display id = %d with error = %d", display_id_, status);
-  }
 }
 
 DisplayError DisplayBuiltIn::GetRefreshRate(uint32_t *refresh_rate) {
@@ -1335,8 +1672,9 @@ DisplayError DisplayBuiltIn::ReconfigureDisplay() {
   const bool display_unchanged = (display_attributes == display_attributes_);
   const bool mixer_unchanged = (mixer_attributes == mixer_attributes_);
   const bool panel_unchanged = (hw_panel_info == hw_panel_info_);
-  if (!dirty && display_unchanged && mixer_unchanged && panel_unchanged) {
-    return kErrorNone;
+  const bool fps_switch = display_unchanged && (display_attributes.fps != current_refresh_rate_);
+  if (!dirty && display_unchanged && mixer_unchanged && panel_unchanged && !fps_switch) {
+     return kErrorNone;
   }
 
   if (CanDeferFpsConfig(display_attributes.fps)) {
@@ -1347,13 +1685,24 @@ DisplayError DisplayBuiltIn::ReconfigureDisplay() {
     GetFpsConfig(&display_attributes, &hw_panel_info);
   }
 
+  if (fps_switch) {
+    uint32_t config;
+    error = hw_intf_->GetConfigIndexForFps(current_refresh_rate_, &config);
+    if (error == kErrorNone) {
+      hw_intf_->GetDisplayAttributes(config, &display_attributes);
+    }
+  } else {
+    current_refresh_rate_ = display_attributes.fps;
+  }
+
+  fb_config_.fps = display_attributes.fps;
   error = comp_manager_->ReconfigureDisplay(display_comp_ctx_, display_attributes, hw_panel_info,
                                             mixer_attributes, fb_config_,
-                                            &(default_clock_hz_));
+                                            &cached_qos_data_);
   if (error != kErrorNone) {
     return error;
   }
-  cached_qos_data_.clock_hz = default_clock_hz_;
+  default_clock_hz_ = cached_qos_data_.clock_hz;
 
   bool disble_pu = true;
   if (mixer_unchanged && panel_unchanged) {
@@ -1403,6 +1752,25 @@ void DisplayBuiltIn::GetFpsConfig(HWDisplayAttributes *display_attr, HWPanelInfo
   panel_info->transfer_time_us = hw_panel_info_.transfer_time_us;
 }
 
+PrimariesTransfer DisplayBuiltIn::GetBlendSpaceFromStcColorMode(
+    const snapdragoncolor::ColorMode &color_mode) {
+  PrimariesTransfer blend_space = {};
+  if (!color_mgr_) {
+    return blend_space;
+  }
+
+  // Set sRGB as default blend space.
+  if (stc_color_modes_.list.empty() || color_mode.intent == snapdragoncolor::kNative ||
+      (color_mode.gamut == ColorPrimaries_Max && color_mode.gamma == Transfer_Max)) {
+    return blend_space;
+  }
+
+  blend_space.primaries = color_mode.gamut;
+  blend_space.transfer = color_mode.gamma;
+
+  return blend_space;
+}
+
 DisplayError DisplayBuiltIn::GetConfig(DisplayConfigFixedInfo *fixed_info) {
   lock_guard<recursive_mutex> obj(recursive_mutex_);
   fixed_info->is_cmdmode = (hw_panel_info_.mode == kModeCommand);
@@ -1423,6 +1791,46 @@ DisplayError DisplayBuiltIn::GetConfig(DisplayConfigFixedInfo *fixed_info) {
   fixed_info->readback_supported = hw_resource_info.has_concurrent_writeback;
 
   return kErrorNone;
+}
+
+void DisplayBuiltIn::SendBacklight() {
+  DisplayError err = kErrorNone;
+  int level = 0;
+  if ((err = hw_intf_->GetPanelBrightness(&level)) != kErrorNone) {
+    return;
+  }
+  HandleBacklightEvent(level);
+}
+
+void DisplayBuiltIn::SendDisplayConfigs() {
+  if (ipc_intf_) {
+    GenericPayload in;
+    uint32_t active_index = 0;
+    IPCDisplayConfigParams *disp_configs = nullptr;
+    int ret = in.CreatePayload<IPCDisplayConfigParams>(disp_configs);
+    if (ret) {
+      DLOGW("failed to create the payload. Error:%d", ret);
+      return;
+    }
+    DisplayError error = hw_intf_->GetActiveConfig(&active_index);
+    if (error != kErrorNone) {
+      return;
+    }
+    disp_configs->x_pixels = display_attributes_.x_pixels;
+    disp_configs->y_pixels = display_attributes_.y_pixels;
+    disp_configs->fps = display_attributes_.fps;
+    disp_configs->config_idx = active_index;
+    disp_configs->smart_panel = display_attributes_.smart_panel;
+     disp_configs->is_primary = IsPrimaryDisplay();
+    if ((ret = ipc_intf_->SetParameter(kIpcParamSetDisplayConfigs, in))) {
+      DLOGW("Failed to send display config, error = %d", ret);
+    }
+  }
+}
+
+DisplayError DisplayBuiltIn::TeardownConcurrentWriteback() {
+  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  return hw_intf_->TeardownConcurrentWriteback();
 }
 
 }  // namespace sdm

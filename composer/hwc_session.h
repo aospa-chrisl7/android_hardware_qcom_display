@@ -17,42 +17,6 @@
  * limitations under the License.
  */
 
-/*
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted (subject to the limitations in the
- * disclaimer below) provided that the following conditions are met:
- *
- *    * Redistributions of source code must retain the above copyright
- *      notice, this list of conditions and the following disclaimer.
- *
- *    * Redistributions in binary form must reproduce the above
- *      copyright notice, this list of conditions and the following
- *      disclaimer in the documentation and/or other materials provided
- *      with the distribution.
- *
- *    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *      contributors may be used to endorse or promote products derived
- *      from this software without specific prior written permission.
- *
- * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-
 #ifndef __HWC_SESSION_H__
 #define __HWC_SESSION_H__
 
@@ -60,6 +24,7 @@
 #include <config/device_interface.h>
 
 #include <core/core_interface.h>
+#include <core/ipc_interface.h>
 #include <utils/locker.h>
 #include <utils/constants.h>
 #include <qd_utils.h>
@@ -70,6 +35,8 @@
 #include <future>   // NOLINT
 #include <map>
 #include <string>
+#include <memory>
+#include <core/display_interface.h>
 
 #include "hwc_callbacks.h"
 #include "hwc_layers.h"
@@ -91,16 +58,16 @@ using android::hardware::hidl_handle;
 using ::android::hardware::hidl_vec;
 using ::android::sp;
 using ::android::hardware::Void;
-namespace composer_V2_4 = ::android::hardware::graphics::composer::V2_4;
 namespace composer_V2_3 = ::android::hardware::graphics::composer::V2_3;
+namespace composer_V2_4 = ::android::hardware::graphics::composer::V2_4;
 using HwcDisplayCapability = composer_V2_4::IComposerClient::DisplayCapability;
-using HwcDisplayCapability_2_3 = composer_V2_3::IComposerClient::DisplayCapability;
 using HwcDisplayConnectionType = composer_V2_4::IComposerClient::DisplayConnectionType;
 using HwcClientTargetProperty = composer_V2_4::IComposerClient::ClientTargetProperty;
 
 namespace sdm {
 
 using vendor::qti::hardware::display::composer::V3_0::IQtiComposerClient;
+
 int32_t GetDataspaceFromColorMode(ColorMode mode);
 
 typedef DisplayConfig::DisplayType DispType;
@@ -240,8 +207,6 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
                                        uint32_t *outDataSize, uint8_t *outData);
   int32_t GetDisplayCapabilities(hwc2_display_t display,
                                  hidl_vec<HwcDisplayCapability> *capabilities);
-  int32_t GetDisplayCapabilities2_3(hwc2_display_t display,
-                                    uint32_t *outNumCapabilities, uint32_t *outCapabilities);
   int32_t GetDisplayBrightnessSupport(hwc2_display_t display, bool *outSupport);
   int32_t SetDisplayBrightness(hwc2_display_t display, float brightness);
   void WaitForResources(bool wait_for_resources, hwc2_display_t active_builtin_id,
@@ -339,6 +304,9 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
   static Locker locker_[HWCCallbacks::kNumDisplays];
   static Locker power_state_[HWCCallbacks::kNumDisplays];
   static Locker hdr_locker_[HWCCallbacks::kNumDisplays];
+  static Locker tui_locker_[HWCCallbacks::kNumDisplays];
+  static bool tui_transition_pending_[HWCCallbacks::kNumDisplays];
+  static int tui_transition_error_[HWCCallbacks::kNumDisplays];
   static Locker display_config_locker_;
   static Locker system_locker_;
 
@@ -348,16 +316,17 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
     explicit CWB(HWCSession *hwc_session) : hwc_session_(hwc_session) { }
     void PresentDisplayDone(hwc2_display_t disp_id);
 
-    int32_t PostBuffer(std::weak_ptr<DisplayConfig::ConfigCallback> callback, bool post_processed,
-                       const native_handle_t *buffer);
+    int32_t PostBuffer(std::weak_ptr<DisplayConfig::ConfigCallback> callback,
+                       const CwbConfig &cwb_config, const native_handle_t *buffer);
 
    private:
     struct QueueNode {
-      QueueNode(std::weak_ptr<DisplayConfig::ConfigCallback> cb, bool pp, const hidl_handle& buf)
-        : callback(cb), post_processed(pp), buffer(buf) { }
+      QueueNode(std::weak_ptr<DisplayConfig::ConfigCallback> cb, const CwbConfig &cwb_conf,
+                const hidl_handle &buf)
+          : callback(cb), cwb_config(cwb_conf), buffer(buf) {}
 
       std::weak_ptr<DisplayConfig::ConfigCallback> callback;
-      bool post_processed = false;
+      CwbConfig cwb_config = {};
       const native_handle_t *buffer;
     };
 
@@ -428,14 +397,19 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
     virtual int IsSmartPanelConfig(uint32_t disp_id, uint32_t config_id, bool *is_smart);
     virtual int IsRotatorSupportedFormat(int hal_format, bool ubwc, bool *supported);
     virtual int ControlQsyncCallback(bool enable);
+    virtual int GetDisplayHwId(uint32_t disp_id, uint32_t *display_hw_id);
+    virtual int SendTUIEvent(DispType dpy, DisplayConfig::TUIEventType event_type);
+    virtual int GetSupportedDisplayRefreshRates(DispType dpy,
+                                                std::vector<uint32_t> *supported_refresh_rates);
+    virtual int IsRCSupported(uint32_t disp_id, bool *supported);
+    virtual int IsSupportedConfigSwitch(uint32_t disp_id, uint32_t config, bool *supported);
     virtual int ControlIdleStatusCallback(bool enable);
+    virtual int GetDisplayType(uint64_t physical_disp_id, DispType *disp_type);
+    virtual int AllowIdleFallback();
 #ifdef DISPLAY_CONFIG_CAMERA_SMOOTH_APIs_1_0
     virtual int SetCameraSmoothInfo(CameraSmoothOp op, uint32_t fps);
     virtual int ControlCameraSmoothCallback(bool enable);
 #endif
-    virtual int IsRCSupported(uint32_t disp_id, bool *supported);
-    virtual int AllowIdleFallback();
-
     std::weak_ptr<DisplayConfig::ConfigCallback> callback_;
     HWCSession *hwc_session_ = nullptr;
   };
@@ -458,6 +432,7 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
   uint32_t throttling_refresh_rate_ = 60;
   std::mutex hotplug_mutex_;
   std::condition_variable hotplug_cv_;
+  bool resource_ready_ = false;
   void UpdateThrottlingRate();
   void SetNewThrottlingRate(uint32_t new_rate);
 
@@ -489,12 +464,14 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
                           uint32_t v_start, uint32_t v_end, uint32_t factor_in,
                           uint32_t factor_out);
   int ControlIdlePowerCollapse(bool enable, bool synchronous);
+  int GetSupportedDisplayRefreshRates(int disp_id, std::vector<uint32_t> *supported_refresh_rates);
   int32_t SetDynamicDSIClock(int64_t disp_id, uint32_t bitrate);
   int32_t getDisplayBrightness(uint32_t display, float *brightness);
   int32_t setDisplayBrightness(uint32_t display, float brightness);
   int32_t getDisplayMaxBrightness(uint32_t display, uint32_t *max_brightness_level);
   bool HasHDRSupport(HWCDisplay *hwc_display);
   void PostInit();
+  int GetDispTypeFromPhysicalId(uint64_t physical_disp_id, DispType *disp_type);
 
   // Uevent handler
   virtual void UEventHandler(const char *uevent_data, int length);
@@ -527,10 +504,6 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
   android::status_t SetColorModeById(const android::Parcel *input_parcel);
   android::status_t SetColorModeFromClient(const android::Parcel *input_parcel);
   android::status_t getComposerStatus();
-  android::status_t SetStandByMode(const android::Parcel *input_parcel);
-  android::status_t GetPanelResolution(const android::Parcel *input_parcel,
-                                       android::Parcel *output_parcel);
-  android::status_t DelayFirstCommit();
   android::status_t SetQSyncMode(const android::Parcel *input_parcel);
   android::status_t SetIdlePC(const android::Parcel *input_parcel);
   android::status_t RefreshScreen(const android::Parcel *input_parcel);
@@ -542,6 +515,8 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
   android::status_t SetFrameTriggerMode(const android::Parcel *input_parcel);
   android::status_t SetPanelLuminanceAttributes(const android::Parcel *input_parcel);
   android::status_t setColorSamplingEnabled(const android::Parcel *input_parcel);
+  android::status_t HandleTUITransition(int disp_id, int event);
+  android::status_t GetDisplayPortId(uint32_t display, int *port_id);
 
   // Internal methods
   HWC2::Error ValidateDisplayInternal(hwc2_display_t display, uint32_t *out_num_types,
@@ -557,8 +532,13 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
   void NotifyClientStatus(bool connected);
   int32_t GetVirtualDisplayId();
   void PerformQsyncCallback(hwc2_display_t display);
-  bool isSmartPanelConfig(uint32_t disp_id, uint32_t config_id);
+  android::status_t TUITransitionPrepare(int disp_id);
+  android::status_t TUITransitionStart(int disp_id);
+  android::status_t TUITransitionEnd(int disp_id);
+  android::status_t TUITransitionUnPrepare(int disp_id);
   void PerformIdleStatusCallback(hwc2_display_t display);
+  DispType GetDisplayConfigDisplayType(int qdutils_disp_type);
+  HWC2::Error TeardownConcurrentWriteback(hwc2_display_t display);
 
   CoreInterface *core_intf_ = nullptr;
   HWCDisplay *hwc_display_[HWCCallbacks::kNumDisplays] = {nullptr};
@@ -611,7 +591,7 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
   std::bitset<HWCCallbacks::kNumDisplays> display_ready_;
   bool secure_session_active_ = false;
   bool is_idle_time_up_ = false;
-  bool override_doze_mode_ = false;
+  std::shared_ptr<IPCIntf> ipc_intf_ = nullptr;
 };
 }  // namespace sdm
 

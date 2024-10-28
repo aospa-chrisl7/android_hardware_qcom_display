@@ -14,13 +14,14 @@ soong_config_module_type {
         "headless",
         "llvmsa",
         "gralloc4",
+        "gralloc_handle_has_no_reserved_size",
         "udfps",
-        "ycrcb_camera_encode",
-        "no_raw10_custom_format",
+        "default",
     ],
     properties: [
         "cflags",
         "srcs",
+        "header_libs",
     ],
 }
 
@@ -36,12 +37,13 @@ qtidisplay_cc_defaults {
         "libcutils",
         "libutils",
     ],
+    clang: true,
     soong_config_variables: {
         drmpp: {
             cflags: ["-DPP_DRM_ENABLE"],
         },
         headless: {
-            cflags: ["-DTARGET_HEADLESS"],
+            cflags: ["-DTARGET_HEADLESS", "-DQMAA"],
         },
         llvmsa: {
             cflags: [
@@ -52,14 +54,11 @@ qtidisplay_cc_defaults {
         gralloc4: {
             cflags: ["-DTARGET_USES_GRALLOC4"],
         },
+        gralloc_handle_has_no_reserved_size: {
+            cflags: ["-DGRALLOC_HANDLE_HAS_NO_RESERVED_SIZE"],
+        },
         udfps: {
             cflags: ["-DUDFPS_ZPOS"],
-        },
-        ycrcb_camera_encode: {
-            cflags: ["-DUSE_YCRCB_CAMERA_ENCODE"],
-        },
-        no_raw10_custom_format: {
-            cflags: ["-DNO_RAW10_CUSTOM_FORMAT"],
         },
     },
 }
@@ -67,7 +66,14 @@ qtidisplay_cc_defaults {
 qtidisplay_cc_defaults {
     name: "qtidisplay_defaults",
     defaults: ["qtidisplay_common_defaults"],
-    header_libs: ["display_headers"],
+    soong_config_variables: {
+        default: {
+            header_libs: ["display_headers", "qti_kernel_headers"],
+        },
+        headless: {
+            header_libs: ["display_headers"],
+        },
+    },
 }
 
 qtidisplay_cc_defaults {
@@ -97,6 +103,7 @@ cc_library_headers {
         "sdm/include",
         "gralloc",
         "libhistogram",
+        "libmemutils",
     ],
     header_libs: [
         "libhardware_headers",
@@ -141,4 +148,5 @@ subdirs = [
     "sdm/libs/utils",
     "sdm/libs/core",
     "qmaa",
+    "libmemutils",
 ]

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2019, The Linux Foundation. All rights reserved.
+* Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -67,7 +67,7 @@
 #ifndef __DRM_PLANE_H__
 #define __DRM_PLANE_H__
 
-#include <drm/sde_drm.h>
+#include <display/drm/sde_drm.h>
 #include <drm_interface.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -121,6 +121,8 @@ class DRMPlane {
   void ResetColorLUTs(bool is_commit, drmModeAtomicReq *req);
   void ResetColorLUTState(DRMTonemapLutType lut_type, bool is_commit, drmModeAtomicReq *req);
   void ResetColorLUT(DRMPPFeatureID id, drmModeAtomicReq *req);
+  void ResetCache(drmModeAtomicReq *req);
+  void ResetPlanesLUT(drmModeAtomicReq *req);
 
  private:
   typedef std::map<DRMProperty, std::tuple<uint64_t, drmModePropertyRes *>> PropertyMap;
@@ -170,6 +172,8 @@ class DRMPlaneManager {
   void UnsetScalerLUT();
   void PostValidate(uint32_t crtc_id, bool success);
   void PostCommit(uint32_t crtc_id, bool success);
+  void ResetCache(drmModeAtomicReq *req, uint32_t crtc_id);
+  void ResetPlanesLUT(drmModeAtomicReq *req);
 
  private:
   int fd_ = -1;

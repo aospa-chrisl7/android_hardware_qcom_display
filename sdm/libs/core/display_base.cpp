@@ -25,7 +25,7 @@
 /*
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -132,12 +132,12 @@ DisplayError DisplayBase::Init() {
 
   uint32_t active_index = 0;
   int drop_vsync = 0;
+  int hw_recovery_threshold = 1;
   hw_intf_->GetActiveConfig(&active_index);
   hw_intf_->GetDisplayAttributes(active_index, &display_attributes_);
   fb_config_ = display_attributes_;
 
-  error = Debug::GetMixerResolution(&mixer_attributes_.width, &mixer_attributes_.height);
-  if (error == kErrorNone) {
+  if (!Debug::GetMixerResolution(&mixer_attributes_.width, &mixer_attributes_.height)) {
     if (hw_intf_->SetMixerAttributes(mixer_attributes_) == kErrorNone) {
       custom_mixer_resolution_ = true;
     }
@@ -169,25 +169,16 @@ DisplayError DisplayBase::Init() {
     color_mgr_ = ColorManagerProxy::CreateColorManagerProxy(display_type_, hw_intf_,
                                                             display_attributes_, hw_panel_info_,
                                                             dpps_intf);
-
-    if (color_mgr_) {
-      if (InitializeColorModes() != kErrorNone) {
-        DLOGW("InitColorModes failed for display %d-%d", display_id_, display_type_);
-      }
-      color_mgr_->ColorMgrCombineColorModes();
-    } else {
-      DLOGW("Unable to create ColorManagerProxy for display %d-%d", display_id_, display_type_);
-    }
   }
 
   error = comp_manager_->RegisterDisplay(display_id_, display_type_, display_attributes_,
                                          hw_panel_info_, mixer_attributes_, fb_config_,
-                                         &display_comp_ctx_, &(default_clock_hz_));
+                                         &display_comp_ctx_, &cached_qos_data_);
   if (error != kErrorNone) {
     DLOGW("Display %d comp manager registration failed!", display_id_);
     goto CleanupOnError;
   }
-  cached_qos_data_.clock_hz = default_clock_hz_;
+  default_clock_hz_ = cached_qos_data_.clock_hz;
 
   if (color_modes_cs_.size() > 0) {
     error = comp_manager_->SetColorModesInfo(display_comp_ctx_, color_modes_cs_);
@@ -211,6 +202,12 @@ DisplayError DisplayBase::Init() {
   Debug::Get()->GetProperty(DROP_SKEWED_VSYNC, &drop_vsync);
   drop_skewed_vsync_ = (drop_vsync == 1);
 
+  Debug::GetProperty(HW_RECOVERY_THRESHOLD, &hw_recovery_threshold);
+  DLOGI("hw_recovery_threshold_ set to %d", hw_recovery_threshold);
+  if (hw_recovery_threshold > 0) {
+    hw_recovery_threshold_ = (UINT32(hw_recovery_threshold));
+  }
+
   return kErrorNone;
 
 CleanupOnError:
@@ -231,8 +228,8 @@ DisplayError DisplayBase::Deinit() {
       hw_intf_->UnsetScaleLutConfig();
     }
   }
-  HWEventsInterface::Destroy(hw_events_intf_);
   HWInterface::Destroy(hw_intf_);
+  HWEventsInterface::Destroy(hw_events_intf_);
   if (rc_panel_feature_init_) {
     rc_core_->Deinit();
     rc_panel_feature_init_ =  false;
@@ -270,12 +267,93 @@ DisplayError DisplayBase::SetupRC() {
   return kErrorNone;
 }
 
+DisplayError DisplayBase::GetCwbBufferResolution(CwbTapPoint cwb_tappoint, uint32_t *x_pixels,
+                                                 uint32_t *y_pixels) {
+  DisplayError error = kErrorNotSupported;
+  DisplayConfigVariableInfo display_config;
+
+  if (cwb_tappoint == CwbTapPoint::kDsppTapPoint) {
+    // To dump post-processed (DSPP) output for CWB, use Panel resolution.
+    uint32_t active_index = 0;
+    error = GetActiveConfig(&active_index);
+    if (error == kErrorNone) {
+      error = GetRealConfig(active_index, &display_config);
+      if (error == kErrorNone) {
+        *x_pixels = display_config.x_pixels;
+        *y_pixels = display_config.y_pixels;
+      }
+    }
+  } else if (cwb_tappoint == CwbTapPoint::kLmTapPoint) {
+    // To dump Layer Mixer output for CWB, use FrameBuffer or Mixer resolution.
+    uint32_t dest_scalar_enabled = 0;
+    IsSupportedOnDisplay(kDestinationScalar, &dest_scalar_enabled);
+
+    if (dest_scalar_enabled) {
+      error = GetMixerResolution(x_pixels, y_pixels);
+    } else {
+      error = GetFrameBufferConfig(&display_config);
+      if (error == kErrorNone) {
+        *x_pixels = display_config.x_pixels;
+        *y_pixels = display_config.y_pixels;
+      }
+    }
+  }
+  return error;
+}
+
+DisplayError DisplayBase::ConfigureCwb(LayerStack *layer_stack) {
+  DisplayError error = kErrorNone;
+  if (hw_resource_info_.has_concurrent_writeback && layer_stack->output_buffer) {  // CWB requested
+    if (!cwb_config_) {  // Instantiate cwb_config_ if cwb was not enabled in previous draw cycle.
+      cwb_config_ = new CwbConfig;
+    }
+    *cwb_config_ = {};  // Reset cwb_config_ so as to set it to new cwb config passed by the client
+
+    if (layer_stack->cwb_config == NULL) {
+      // If Cwb client doesn't set Cwb config in LayerStack.cwb_config, then we consider full frame
+      // ROI and recognize tppt. from post-processed flag.
+
+      // set tappoint based on post-processed flag.
+      cwb_config_->tap_point = (layer_stack->flags.post_processed_output)
+                                   ? CwbTapPoint::kDsppTapPoint
+                                   : CwbTapPoint::kLmTapPoint;
+
+      uint32_t buffer_width = 0, buffer_height = 0;
+      error = GetCwbBufferResolution(cwb_config_->tap_point, &buffer_width, &buffer_height);
+      if (error != kErrorNone) {
+        DLOGE("GetCwbBufferResolution failed for tap_point = %d .", cwb_config_->tap_point);
+        return error;
+      }
+
+      // Setting full frame ROI
+      cwb_config_->cwb_full_rect = LayerRect(0.0f, 0.0f, FLOAT(buffer_width), FLOAT(buffer_height));
+      DLOGW("Layerstack.cwb_config isn't set by CWB client. Thus, falling back to Full frame ROI.");
+      cwb_config_->cwb_roi = cwb_config_->cwb_full_rect;
+    } else {  // Cwb client has set the cwb config in LayerStack.cwb_config .
+      *cwb_config_ = *(layer_stack->cwb_config);
+    }
+
+    hw_layers_.info.hw_cwb_config = cwb_config_;
+    error = ValidateCwbConfigInfo(cwb_config_, layer_stack->output_buffer->format);
+    if (error != kErrorNone) {
+      DLOGE("CWB_config validation failed.");
+      return error;
+    }
+  } else if (cwb_config_) {  // CWB isn't requested in the current draw cycle.
+    // Check and release cwb_config_ if it was instantiated in the previous draw cycle.
+    delete cwb_config_;
+    cwb_config_ = NULL;
+  }
+  return error;
+}
+
 DisplayError DisplayBase::BuildLayerStackStats(LayerStack *layer_stack) {
   std::vector<Layer *> &layers = layer_stack->layers;
   HWLayersInfo &hw_layers_info = hw_layers_.info;
   hw_layers_info.app_layer_count = 0;
 
   hw_layers_info.stack = layer_stack;
+  hw_layers_info.wide_color_primaries.clear();
 
   for (auto &layer : layers) {
     if (layer->buffer_map == nullptr) {
@@ -363,7 +441,7 @@ DisplayError DisplayBase::Prepare(LayerStack *layer_stack) {
 
   DTRACE_SCOPED();
   // Allow prepare as pending doze/pending_power_on is handled as a part of draw cycle
-  if (!active_ && !pending_doze_ && !pending_power_on_) {
+  if (!active_ && (pending_power_state_ == kPowerStateNone)) {
     return kErrorPermission;
   }
 
@@ -389,6 +467,9 @@ DisplayError DisplayBase::Prepare(LayerStack *layer_stack) {
     SetRCData(layer_stack);
   }
 
+  if (color_mgr_) {
+    color_mgr_->PrePrepare(&hw_layers_);
+  }
 
   if (color_mgr_ && color_mgr_->NeedsPartialUpdateDisable()) {
     DisablePartialUpdateOneFrame();
@@ -403,6 +484,7 @@ DisplayError DisplayBase::Prepare(LayerStack *layer_stack) {
 
   hw_layers_.updates_mask.set(kUpdateResources);
   comp_manager_->GenerateROI(display_comp_ctx_, &hw_layers_);
+  rc_pu_flag_status_ = hw_layers_.info.rc_pu_flag_status;
 
   comp_manager_->PrePrepare(display_comp_ctx_, &hw_layers_);
 
@@ -436,6 +518,7 @@ DisplayError DisplayBase::Prepare(LayerStack *layer_stack) {
 
   comp_manager_->PostPrepare(display_comp_ctx_, &hw_layers_);
 
+  pending_commit_ = true;
   DLOGI_IF(kTagDisplay, "Exiting Prepare for display type : %d error: %d", display_type_, error);
   return error;
 }
@@ -444,6 +527,7 @@ DisplayError DisplayBase::Prepare(LayerStack *layer_stack) {
 void DisplayBase::SetRCData(LayerStack *layer_stack) {
   int ret = -1;
   HWLayersInfo &hw_layers_info = hw_layers_.info;
+  hw_layers_info.spr_enable = spr_enable_;
   DLOGI_IF(kTagDisplay, "Display resolution: %dx%d", display_attributes_.x_pixels,
            display_attributes_.y_pixels);
   if (rc_cached_res_width_ != display_attributes_.x_pixels) {
@@ -497,9 +581,6 @@ void DisplayBase::SetRCData(LayerStack *layer_stack) {
   if (!ret) {
     DLOGD_IF(kTagDisplay, "RC top_height = %d, RC bot_height = %d", rc_out_config->top_height,
              rc_out_config->bottom_height);
-    if (rc_out_config->rc_needs_full_roi) {
-      DisablePartialUpdateOneFrame();
-    }
     hw_layers_info.rc_config = true;
     hw_layers_info.rc_layers_info.top_width = rc_out_config->top_width;
     hw_layers_info.rc_layers_info.top_height = rc_out_config->top_height;
@@ -515,42 +596,71 @@ DisplayError DisplayBase::Commit(LayerStack *layer_stack) {
   if (rc_panel_feature_init_) {
     GenericPayload in, out;
     RCMaskCfgState *mask_status = nullptr;
+    uint64_t *rc_pu_flag_status = nullptr;
     int ret = -1;
     ret = out.CreatePayload<RCMaskCfgState>(mask_status);
     if (ret) {
       DLOGE("failed to create the payload. Error:%d", ret);
       return kErrorUndefined;
     }
+    ret = in.CreatePayload<uint64_t>(rc_pu_flag_status);
+    if (ret) {
+      DLOGE("failed to create the payload. Error:%d", ret);
+      return kErrorUndefined;
+    }
+    *rc_pu_flag_status = rc_pu_flag_status_;
     ret = rc_core_->ProcessOps(kRCFeatureCommit, in, &out);
+    hw_layers_.info.rc_pu_needs_full_roi = (*mask_status).rc_pu_full_roi;
     if (ret) {
      // If RC commit failed, fall back to default (GPU/SDE pipes) drawing of "handled" mask layers.
      DLOGW("Failed to set the data on driver for display: %d-%d, Error: %d, status: %d",
            display_id_, display_type_, ret, (*mask_status).rc_mask_state);
       if ((*mask_status).rc_mask_state == kStatusRcMaskStackHandled) {
-        needs_validate_ = true;
-        DLOGW("Need to call Corresponding prepare to handle the mask layers %d %d.",
-              display_id_, display_type_);
-        for (auto &layer : layer_stack->layers) {
-          if (layer->input_buffer.flags.mask_layer) {
-            layer->request.flags.rc = false;
+        if (!pending_commit_) {
+          needs_validate_ = true;
+          DLOGW("Need to call Corresponding prepare to handle the mask layers %d %d.",
+                display_id_, display_type_);
+          for (auto &layer : layer_stack->layers) {
+            if (layer->input_buffer.flags.mask_layer) {
+              layer->request.flags.rc = false;
+            }
           }
+          return kErrorNotValidated;
+        } else {
+          needs_refresh_ = true;
+          DLOGI_IF(kTagDisplay, "Triggering refresh to handle RC state machine");
         }
-        return kErrorNotValidated;
       }
     } else {
-      DLOGI_IF(kTagDisplay, "Status of RC mask data: %d.", (*mask_status).rc_mask_state);
+      DLOGI_IF(kTagDisplay, "Status of RC mask data: %d., pu_rc_status_: 0x%" PRIx64,
+               (*mask_status).rc_mask_state, rc_pu_flag_status_);
+      if ((*mask_status).rc_pu_full_roi) {
+        if (rc_pu_flag_status_ && rc_pu_flag_status_ != SDE_HW_PU_USECASE) {
+          if (!pending_commit_) {
+            needs_validate_ = true;
+            return kErrorNotValidated;
+          } else {
+            needs_refresh_ = true;
+            DLOGI_IF(kTagDisplay, "Triggering refresh to handle RC state machine");
+          }
+        }
+      }
       if ((*mask_status).rc_mask_state == kStatusRcMaskStackDirty) {
-        DisablePartialUpdateOneFrame();
-        needs_validate_ = true;
-        DLOGI_IF(kTagDisplay, "Mask is ready for display %d-%d, call Corresponding Prepare()",
-                 display_id_, display_type_);
-        return kErrorNotValidated;
+        if (!pending_commit_) {
+          needs_validate_ = true;
+          DLOGI_IF(kTagDisplay, "Mask is ready for display %d-%d, call Corresponding Prepare()",
+                   display_id_, display_type_);
+          return kErrorNotValidated;
+        } else {
+          needs_refresh_ = true;
+          DLOGI_IF(kTagDisplay, "Triggering refresh to handle RC state machine");
+        }
       }
     }
   }
 
   // Allow commit as pending doze/pending_power_on is handled as a part of draw cycle
-  if (!active_ && !pending_doze_ && !pending_power_on_) {
+  if (!active_ && (pending_power_state_ == kPowerStateNone)) {
     needs_validate_ = true;
     return kErrorPermission;
   }
@@ -592,6 +702,11 @@ DisplayError DisplayBase::Commit(LayerStack *layer_stack) {
     return error;
   }
 
+  if (secure_event_ == kSecureDisplayEnd || secure_event_ == kTUITransitionEnd ||
+      secure_event_ == kTUITransitionUnPrepare) {
+    secure_event_ = kSecureEventMax;
+  }
+
   PostCommitLayerParams(layer_stack);
 
   if (partial_update_control_) {
@@ -607,7 +722,7 @@ DisplayError DisplayBase::Commit(LayerStack *layer_stack) {
   drop_hw_vsync_ = false;
 
   // Reset pending power state if any after the commit
-  error = HandlePendingPowerState(layer_stack->retire_fence);
+  error = ResetPendingPowerState(layer_stack->retire_fence);
   if (error != kErrorNone) {
     return error;
   }
@@ -620,6 +735,11 @@ DisplayError DisplayBase::Commit(LayerStack *layer_stack) {
 
   comp_manager_->SetSafeMode(false);
 
+  if (needs_refresh_) {
+    event_handler_->Refresh();
+    needs_refresh_ = false;
+  }
+  pending_commit_ = false;
   DLOGI_IF(kTagDisplay, "Exiting commit for display: %d-%d", display_id_, display_type_);
 
   return error;
@@ -708,6 +828,17 @@ DisplayError DisplayBase::GetConfig(DisplayConfigFixedInfo *fixed_info) {
   return kErrorNone;
 }
 
+DisplayError DisplayBase::GetRealConfig(uint32_t index, DisplayConfigVariableInfo *variable_info) {
+  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  HWDisplayAttributes attrib;
+  if (hw_intf_->GetDisplayAttributes(index, &attrib) == kErrorNone) {
+    *variable_info = attrib;
+    return kErrorNone;
+  }
+
+  return kErrorNotSupported;
+}
+
 DisplayError DisplayBase::GetActiveConfig(uint32_t *index) {
   lock_guard<recursive_mutex> obj(recursive_mutex_);
   return hw_intf_->GetActiveConfig(index);
@@ -734,6 +865,9 @@ DisplayError DisplayBase::SetDisplayState(DisplayState state, bool teardown,
         display_type_, teardown);
 
   if (state == state_) {
+    if (pending_power_state_ != kPowerStateNone) {
+      hw_intf_->CancelDeferredPowerMode();
+    }
     DLOGI("Same state transition is requested.");
     return kErrorNone;
   }
@@ -749,9 +883,16 @@ DisplayError DisplayBase::SetDisplayState(DisplayState state, bool teardown,
   switch (state) {
   case kStateOff:
     hw_layers_.info.hw_layers.clear();
-    error = hw_intf_->Flush(&hw_layers_);
-    if (error == kErrorNone) {
-      error = hw_intf_->PowerOff(teardown);
+    error = hw_intf_->PowerOff(teardown);
+    if (error != kErrorNone) {
+      if (error == kErrorDeferred) {
+        pending_power_state_ = kPowerStateOff;
+        error = kErrorNone;
+      } else {
+        return error;
+      }
+    } else {
+      pending_power_state_ = kPowerStateNone;
     }
     cached_qos_data_ = {};
     cached_qos_data_.clock_hz = default_clock_hz_;
@@ -761,20 +902,23 @@ DisplayError DisplayBase::SetDisplayState(DisplayState state, bool teardown,
     error = hw_intf_->PowerOn(cached_qos_data_, release_fence);
     if (error != kErrorNone) {
       if (error == kErrorDeferred) {
-        pending_power_on_ = true;
+        pending_power_state_ = kPowerStateOn;
         error = kErrorNone;
       } else {
         return error;
       }
+    } else {
+      pending_power_state_ = kPowerStateNone;
     }
 
+    fb_config_.fps = display_attributes_.fps;
     error = comp_manager_->ReconfigureDisplay(display_comp_ctx_, display_attributes_,
                                               hw_panel_info_, mixer_attributes_, fb_config_,
-                                              &(default_clock_hz_));
+                                              &cached_qos_data_);
     if (error != kErrorNone) {
       return error;
     }
-    cached_qos_data_.clock_hz = default_clock_hz_;
+    default_clock_hz_ = cached_qos_data_.clock_hz;
 
     active = true;
     break;
@@ -783,17 +927,30 @@ DisplayError DisplayBase::SetDisplayState(DisplayState state, bool teardown,
     error = hw_intf_->Doze(cached_qos_data_, release_fence);
     if (error != kErrorNone) {
       if (error == kErrorDeferred) {
-        pending_doze_ = true;
+        pending_power_state_ = kPowerStateDoze;
         error = kErrorNone;
       } else {
         return error;
       }
+    } else {
+      pending_power_state_ = kPowerStateNone;
     }
     active = true;
     break;
 
   case kStateDozeSuspend:
     error = hw_intf_->DozeSuspend(cached_qos_data_, release_fence);
+    if (error != kErrorNone) {
+      if (error == kErrorDeferred) {
+        pending_power_state_ = kPowerStateDozeSuspend;
+        error = kErrorNone;
+      } else {
+        return error;
+      }
+    } else {
+      pending_power_state_ = kPowerStateNone;
+    }
+
     if (display_type_ != kBuiltIn) {
       active = true;
     }
@@ -816,31 +973,20 @@ DisplayError DisplayBase::SetDisplayState(DisplayState state, bool teardown,
   DisablePartialUpdateOneFrame();
 
   if (error == kErrorNone) {
-    // If previously requested doze state is still pending reset it on any new display state request
-    // and handle the new request.
-    if (state != kStateDoze) {
-      pending_doze_ = false;
-    }
-
-    if (!pending_doze_ && !pending_power_on_) {
+    if (pending_power_state_ == kPowerStateNone) {
       active_ = active;
       state_ = state;
+      // Handle vsync pending on resume, Since the power on commit is synchronous we pass -1 as
+      // retire fence otherwise pass valid retire fence
+      if (state == kStateOn) {
+        HandlePendingVSyncEnable(nullptr /* retire fence */);
+      }
     }
     comp_manager_->SetDisplayState(display_comp_ctx_, state,
-                                   release_fence ? *release_fence : nullptr);
-
-    // If previously requested power on state is still pending reset it on any new display state
-    // request and handle the new request.
-    if (state != kStateOn) {
-      pending_power_on_ = false;
-    }
+                            release_fence ? *release_fence : nullptr);
   }
-
-  // Handle vsync pending on resume, Since the power on commit is synchronous we pass -1 as retire
-  // fence otherwise pass valid retire fence
-  if (state_ == kStateOn) {
-    return HandlePendingVSyncEnable(nullptr /* retire fence */);
-  }
+  DLOGI("active %d-%d state %d-%d pending_power_state_ %d", active, active_, state, state_,
+        pending_power_state_);
 
   return error;
 }
@@ -932,7 +1078,6 @@ std::string DisplayBase::Dump() {
   os << " h_total: " << display_attributes_.h_total;
   os << " clk: " << display_attributes_.clock_khz;
   os << " Topology: " << display_attributes_.topology;
-  os << " Qsync mode: " << active_qsync_mode_;
   os << std::noboolalpha;
 
   os << "\nCurrent Color Mode: " << current_color_mode_.c_str();
@@ -1323,7 +1468,12 @@ DisplayError DisplayBase::SetColorTransform(const uint32_t length, const double 
     return kErrorParameters;
   }
 
-  return color_mgr_->ColorMgrSetColorTransform(length, color_transform);
+  DisplayError error = color_mgr_->ColorMgrSetColorTransform(length, color_transform);
+  if (error) {
+    return error;
+  }
+  DisablePartialUpdateOneFrame();
+  return kErrorNone;
 }
 
 DisplayError DisplayBase::GetDefaultColorMode(std::string *color_mode) {
@@ -1385,6 +1535,77 @@ DisplayError DisplayBase::ApplyDefaultDisplayMode() {
   return kErrorNone;
 }
 
+bool DisplayBase::IsValidCwbRoi(const LayerRect &roi, const LayerRect &full_frame) {
+  bool is_valid = true;
+  if (!IsValid(roi) || roi.left < 0 || roi.top < 0 || roi.right < 0 || roi.bottom < 0) {
+    is_valid = false;
+  } else if (roi.top < full_frame.top || roi.top >= full_frame.bottom ||
+             roi.bottom <= full_frame.top || roi.bottom > full_frame.bottom) {
+    is_valid = false;
+  } else if (roi.left < full_frame.left || roi.left >= full_frame.right ||
+             roi.right <= full_frame.left || roi.right > full_frame.right) {
+    is_valid = false;
+  }
+  return is_valid;
+}
+
+DisplayError DisplayBase::ValidateCwbConfigInfo(CwbConfig *cwb_config,
+                                                const LayerBufferFormat &format) {
+  CwbTapPoint &tap_point = cwb_config->tap_point;
+  if (tap_point < CwbTapPoint::kLmTapPoint || tap_point > CwbTapPoint::kDsppTapPoint) {
+    DLOGE("Invalid CWB tappoint. %d ", tap_point);
+    return kErrorParameters;
+  }
+
+  LayerRect &roi = cwb_config->cwb_roi;
+  LayerRect &full_frame = cwb_config->cwb_full_rect;
+  uint32_t cwb_roi_supported = 0;  // Check whether CWB ROI is supported.
+  IsSupportedOnDisplay(kCwbCrop, &cwb_roi_supported);
+  if (!cwb_roi_supported) {
+    roi = full_frame;
+    return kErrorNone;  // below checks are not needed if CWB ROI isn't supported.
+  }
+
+  if (!IsRgbFormat(format)) {  // CWB ROI is supported only on RGB color formats. Thus, in-case of
+    // other color formats, fallback to Full frame ROI.
+    DLOGW("CWB ROI is not suopported on color format : %s , thus falling back to Full frame ROI.",
+          GetFormatString(format));
+    roi = full_frame;
+  }
+
+  bool &pu_as_cwb_roi = cwb_config->pu_as_cwb_roi;
+  bool is_valid_cwb_roi = IsValidCwbRoi(roi, full_frame);
+  if (is_valid_cwb_roi && !pu_as_cwb_roi) {
+    // If client passed valid ROI and PU ROI not to be included in CWB ROI, then
+    // make Client ROI's (width * height) as 256B aligned.
+    int cwb_alignment_factor = GetCwbAlignmentFactor(format);
+    if (!cwb_alignment_factor) {
+      DLOGE("Output buffer has invalid color format.");
+      return kErrorParameters;
+    }
+    ApplyCwbRoiRestrictions(roi, full_frame, cwb_alignment_factor);
+  }
+
+  // For cmd mode : Incase CWB Client sets cwb_config.pu_as_cwb_roi as true, then PU ROI would be
+  // included in CWB ROI. Incase client passes invalid ROI, only PU ROI generated from dirty rects
+  // of app layers would be taken as CWB ROI. Incase client passes valid ROI, then union of PU ROI
+  // and client's ROI would be taken as CWB ROI.
+  // For video mode : PU ROI would be full frame rect. If either pu_as_cwb_roi is true or client
+  // passes invalid ROI, then CWB ROI would also be set as full frame. Incase pu_as_cwb_roi is
+  // False and client passes a valid ROI, then the client's ROI would be set as CWB ROI.
+  if (pu_as_cwb_roi) {
+    DLOGI_IF(kTagDisplay, "PU ROI would be included in CWB ROI.");
+  } else if (!is_valid_cwb_roi) {
+    DLOGI_IF(kTagDisplay, "Client provided invalid ROI. Going for Full frame CWB.");
+    roi = full_frame;
+  }
+
+  DLOGI_IF(kTagDisplay, "Cwb_config: tap_point %d, CWB ROI Rect(%f %f %f %f), PU_as_CWB_ROI %d",
+           tap_point, roi.left, roi.top, roi.right, roi.bottom, pu_as_cwb_roi);
+
+  return kErrorNone;
+}
+
 DisplayError DisplayBase::SetCursorPosition(int x, int y) {
   lock_guard<recursive_mutex> obj(recursive_mutex_);
   if (state_ != kStateOn) {
@@ -1437,8 +1658,8 @@ DisplayError DisplayBase::HandlePendingVSyncEnable(const shared_ptr<Fence> &reti
 DisplayError DisplayBase::SetVSyncState(bool enable) {
   lock_guard<recursive_mutex> obj(recursive_mutex_);
 
-  if (state_ == kStateOff && enable) {
-    DLOGW("Can't enable vsync when display %d-%d is powered off!! Defer it when display is active",
+  if ((state_ == kStateOff || secure_event_ != kSecureEventMax) && enable) {
+    DLOGW("Can't enable vsync when display %d-%d is powered off or SecureDisplay/TUI in progress",
           display_id_, display_type_);
     vsync_enable_pending_ = true;
     return kErrorNone;
@@ -1501,13 +1722,13 @@ DisplayError DisplayBase::ReconfigureDisplay() {
     return kErrorNone;
   }
 
+  fb_config_.fps = display_attributes_.fps;
   error = comp_manager_->ReconfigureDisplay(display_comp_ctx_, display_attributes, hw_panel_info,
-                                            mixer_attributes, fb_config_,
-                                            &(default_clock_hz_));
+                                            mixer_attributes, fb_config_, &cached_qos_data_);
   if (error != kErrorNone) {
     return error;
   }
-  cached_qos_data_.clock_hz = default_clock_hz_;
+  default_clock_hz_ = cached_qos_data_.clock_hz;
 
   bool disble_pu = true;
   if (mixer_unchanged && panel_unchanged) {
@@ -1613,6 +1834,22 @@ bool DisplayBase::NeedsMixerReconfiguration(LayerStack *layer_stack, uint32_t *n
   uint32_t mixer_height = mixer_attributes_.height;
   uint32_t fb_width = fb_config_.x_pixels;
   uint32_t fb_height = fb_config_.y_pixels;
+  uint32_t display_width = display_attributes_.x_pixels;
+  uint32_t display_height = display_attributes_.y_pixels;
+
+  if (hw_resource_info_.has_concurrent_writeback && layer_stack->output_buffer) {
+    DLOGV_IF(kTagDisplay, "Found concurrent writeback, configure LM width:%d height:%d",
+             fb_width, fb_height);
+    *new_mixer_width = fb_width;
+    *new_mixer_height = fb_height;
+    return ((*new_mixer_width != mixer_width) || (*new_mixer_height != mixer_height));
+  }
+
+  if (secure_event_ == kSecureDisplayStart || secure_event_ == kTUITransitionStart) {
+    *new_mixer_width = display_width;
+    *new_mixer_height = display_height;
+    return ((*new_mixer_width != mixer_width) || (*new_mixer_height != mixer_height));
+  }
 
   if (req_mixer_width_ && req_mixer_height_) {
     DLOGD_IF(kTagDisplay, "Required mixer width : %d, height : %d",
@@ -1629,8 +1866,6 @@ bool DisplayBase::NeedsMixerReconfiguration(LayerStack *layer_stack, uint32_t *n
   uint32_t layer_count = UINT32(layer_stack->layers.size());
   uint32_t fb_area = fb_width * fb_height;
   LayerRect fb_rect = (LayerRect) {0.0f, 0.0f, FLOAT(fb_width), FLOAT(fb_height)};
-  uint32_t display_width = display_attributes_.x_pixels;
-  uint32_t display_height = display_attributes_.y_pixels;
 
   RectOrientation fb_orientation = GetOrientation(fb_rect);
   uint32_t max_layer_area = 0;
@@ -1716,12 +1951,11 @@ DisplayError DisplayBase::SetFrameBufferConfig(const DisplayConfigVariableInfo &
   }
 
   error =  comp_manager_->ReconfigureDisplay(display_comp_ctx_, display_attributes_, hw_panel_info_,
-                                             mixer_attributes_, variable_info,
-                                             &(default_clock_hz_));
+                                             mixer_attributes_, variable_info, &cached_qos_data_);
   if (error != kErrorNone) {
     return error;
   }
-  cached_qos_data_.clock_hz = default_clock_hz_;
+  default_clock_hz_ = cached_qos_data_.clock_hz;
 
   fb_config_.x_pixels = width;
   fb_config_.y_pixels = height;
@@ -2123,8 +2357,10 @@ void DisplayBase::HwRecovery(const HWRecoveryEvent sdm_event_code) {
   switch (sdm_event_code) {
     case HWRecoveryEvent::kSuccess:
       hw_recovery_logs_captured_ = false;
+      hw_recovery_count_ = 0;
       break;
     case HWRecoveryEvent::kCapture:
+#ifndef TRUSTED_VM
       if (!disable_hw_recovery_dump_ && !hw_recovery_logs_captured_) {
         hw_intf_->DumpDebugData();
         hw_recovery_logs_captured_ = true;
@@ -2135,8 +2371,23 @@ void DisplayBase::HwRecovery(const HWRecoveryEvent sdm_event_code) {
       } else {
         DLOGI("Debugfs data dumping is disabled for display = %d", display_type_);
       }
+      hw_recovery_count_++;
+      if (hw_recovery_count_ >= hw_recovery_threshold_) {
+        DLOGI("display = %d attempting to start display power reset", display_type_);
+        if (StartDisplayPowerReset()) {
+          DLOGI("display = %d allowed to start display power reset", display_type_);
+          event_handler_->HandleEvent(kDisplayPowerResetEvent);
+          EndDisplayPowerReset();
+          DLOGI("display = %d has finished display power reset", display_type_);
+          hw_recovery_count_ = 0;
+        }
+      }
+#else
+      event_handler_->HandleEvent(kDisplayPowerResetEvent);
+#endif
       break;
     case HWRecoveryEvent::kDisplayPowerReset:
+#ifndef TRUSTED_VM
       DLOGI("display = %d attempting to start display power reset", display_type_);
       if (StartDisplayPowerReset()) {
         DLOGI("display = %d allowed to start display power reset", display_type_);
@@ -2144,6 +2395,9 @@ void DisplayBase::HwRecovery(const HWRecoveryEvent sdm_event_code) {
         EndDisplayPowerReset();
         DLOGI("display = %d has finished display power reset", display_type_);
       }
+#else
+      event_handler_->HandleEvent(kDisplayPowerResetEvent);
+#endif
       break;
     default:
       return;
@@ -2258,27 +2512,19 @@ bool DisplayBase::CanSkipValidate() {
   return skip_validate;
 }
 
-DisplayError DisplayBase::HandlePendingPowerState(const shared_ptr<Fence> &retire_fence) {
-  if (pending_doze_ || pending_power_on_) {
+DisplayError DisplayBase::ResetPendingPowerState(const shared_ptr<Fence> &retire_fence) {
+  if (pending_power_state_ != kPowerStateNone) {
     // Retire fence signalling confirms that CRTC enabled, hence wait for retire fence before
     // we enable vsync
     Fence::Wait(retire_fence);
 
-    if (pending_doze_) {
-      state_ = kStateDoze;
-      DisplayError error = ReconfigureDisplay();
-      if (error != kErrorNone) {
-        return error;
-      }
-      event_handler_->Refresh();
-    }
-    if (pending_power_on_) {
-      state_ = kStateOn;
-    }
+    DisplayState pending_state;
+    GetPendingDisplayState(&pending_state);
+
+    state_ = pending_state;
     active_ = true;
 
-    pending_doze_ = false;
-    pending_power_on_ = false;
+    pending_power_state_ = kPowerStateNone;
   }
   return kErrorNone;
 }
@@ -2301,13 +2547,176 @@ bool DisplayBase::GameEnhanceSupported() {
   return false;
 }
 
+DisplayError DisplayBase::GetPendingDisplayState(DisplayState *disp_state) {
+  if (!disp_state) {
+    return kErrorParameters;
+  }
+  DLOGI("pending_power_state %d for display %d-%d", pending_power_state_, display_id_,
+        display_type_);
+  switch (pending_power_state_) {
+    case kPowerStateOn:
+      *disp_state = kStateOn;
+      break;
+    case kPowerStateOff:
+      *disp_state = kStateOff;
+      break;
+    case kPowerStateDoze: {
+      *disp_state = kStateDoze;
+      DisplayError error = ReconfigureDisplay();
+      if (error != kErrorNone) {
+        return error;
+      }
+      event_handler_->Refresh();
+      break;
+    }
+    case kPowerStateDozeSuspend:
+      *disp_state = kStateDozeSuspend;
+      break;
+    default:
+      return kErrorParameters;
+  }
+  return kErrorNone;
+}
+
+DisplayError DisplayBase::IsSupportedOnDisplay(const SupportedDisplayFeature feature,
+                                               uint32_t *supported) {
+  DisplayError error = kErrorNone;
+
+  if (!supported) {
+    return kErrorParameters;
+  }
+
+  switch (feature) {
+    case kSupportedModeSwitch: {
+      lock_guard<recursive_mutex> obj(recursive_mutex_);
+      error = hw_intf_->GetFeatureSupportStatus(kAllowedModeSwitch, supported);
+      break;
+    }
+    case kDestinationScalar:
+      *supported = custom_mixer_resolution_;
+      break;
+    case kCwbCrop:
+      error = hw_intf_->GetFeatureSupportStatus(kHasCwbCrop, supported);
+      break;
+    case kDedicatedCwb:
+      error = hw_intf_->GetFeatureSupportStatus(kHasDedicatedCwb, supported);
+      break;
+    default:
+      DLOGW("Feature:%d is not present for display %d:%d", feature, display_id_, display_type_);
+      error = kErrorParameters;
+      break;
+  }
+
+  return error;
+}
+
+void DisplayBase::SetPendingPowerState(DisplayState state) {
+  switch (state) {
+    case kStateOn:
+      pending_power_state_ = kPowerStateOn;
+      break;
+    case kStateOff:
+      pending_power_state_ = kPowerStateOff;
+      break;
+    case kStateDoze:
+      pending_power_state_ = kPowerStateDoze;
+      break;
+    case kStateDozeSuspend:
+      pending_power_state_ = kPowerStateDozeSuspend;
+      break;
+    default:
+      return;
+  }
+  DLOGI("pending_power_state %d for display %d-%d", pending_power_state_, display_id_,
+        display_type_);
+}
+
+DisplayError DisplayBase::HandleSecureEvent(SecureEvent secure_event, bool *needs_refresh) {
+  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  if (!needs_refresh) {
+    return kErrorParameters;
+  }
+  DisplayError err = kErrorNone;
+  *needs_refresh = false;
+
+  DLOGI("Secure event %d for display %d-%d", secure_event, display_id_, display_type_);
+
+  if (secure_event == kTUITransitionStart &&
+      (state_ != kStateOn || (pending_power_state_ != kPowerStateNone))) {
+    DLOGW("Cannot start TUI session when display state is %d or pending_power_state %d",
+          state_, pending_power_state_);
+    return kErrorPermission;
+  }
+  shared_ptr<Fence> release_fence = nullptr;
+  if (secure_event == kTUITransitionStart) {
+    if (vsync_enable_) {
+      err = SetVSyncState(false /* enable */);
+      if (err != kErrorNone) {
+        return err;
+      }
+      vsync_enable_pending_ = true;
+    }
+    *needs_refresh = (hw_panel_info_.mode == kModeCommand);
+    DisablePartialUpdateOneFrame();
+    err = hw_events_intf_->SetEventState(HWEvent::BACKLIGHT_EVENT, true);
+    if (err != kErrorNone) {
+      return err;
+    }
+  } else if (secure_event == kTUITransitionPrepare) {
+    DisplayState state = state_;
+    err = SetDisplayState(kStateOff, true /* teardown */, &release_fence);
+    if (err != kErrorNone) {
+      DLOGE("SetDisplay state off failed for %d err %d", display_id_, err);
+      return err;
+    }
+    SetPendingPowerState(state);
+  }
+
+  err = hw_intf_->HandleSecureEvent(secure_event, cached_qos_data_);
+  if (err != kErrorNone) {
+    return err;
+  }
+
+  comp_manager_->HandleSecureEvent(display_comp_ctx_, secure_event);
+  secure_event_ = secure_event;
+  if (secure_event == kTUITransitionEnd) {
+    DisplayState pending_state;
+    *needs_refresh = true;
+    if (GetPendingDisplayState(&pending_state) == kErrorNone) {
+      if (pending_state == kStateOff) {
+        shared_ptr<Fence> release_fence = nullptr;
+        DisplayError err = SetDisplayState(pending_state, false /* teardown */, &release_fence);
+        if (err != kErrorNone) {
+          DLOGE("SetDisplay state %d failed for %d err %d", pending_state, display_id_, err);
+          return err;
+        }
+        *needs_refresh = false;
+      }
+    }
+    DisablePartialUpdateOneFrame();
+    err = hw_events_intf_->SetEventState(HWEvent::BACKLIGHT_EVENT, false);
+    if (err != kErrorNone) {
+      return err;
+    }
+  } else if (secure_event == kTUITransitionUnPrepare) {
+    // Trigger refresh on non targetted display to update the screen after TUI end
+    *needs_refresh = true;
+    DisplayState state = kStateOff;
+    if (GetPendingDisplayState(&state) == kErrorNone) {
+      shared_ptr<Fence> release_fence = nullptr;
+      err = SetDisplayState(state, false /* teardown */, &release_fence);
+      if (err != kErrorNone) {
+        DLOGE("SetDisplay state %d failed for %d err %d", state, display_id_, err);
+        return err;
+      }
+    }
+  }
+  return kErrorNone;
+}
+
 DisplayError DisplayBase::OnMinHdcpEncryptionLevelChange(uint32_t min_enc_level) {
   lock_guard<recursive_mutex> obj(recursive_mutex_);
   return hw_intf_->OnMinHdcpEncryptionLevelChange(min_enc_level);
-}
-
-DisplayError DisplayBase::DelayFirstCommit() {
-  return hw_intf_->DelayFirstCommit();
 }
 
 }  // namespace sdm

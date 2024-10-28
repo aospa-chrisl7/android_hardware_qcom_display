@@ -28,40 +28,40 @@
 */
 
 /*
-* Changes from Qualcomm Innovation Center are provided under the following license:
-*
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*    * Redistributions of source code must retain the above copyright
-*      notice, this list of conditions and the following disclaimer.
-*
-*    * Redistributions in binary form must reproduce the above
-*      copyright notice, this list of conditions and the following
-*      disclaimer in the documentation and/or other materials provided
-*      with the distribution.
-*
-*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*      contributors may be used to endorse or promote products derived
-*      from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *    * Redistributions of source code must retain the above copyright
+ *      notice, this list of conditions and the following disclaimer.
+ *
+ *    * Redistributions in binary form must reproduce the above
+ *      copyright notice, this list of conditions and the following
+ *      disclaimer in the documentation and/or other materials provided
+ *      with the distribution.
+ *
+ *    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *      contributors may be used to endorse or promote products derived
+ *      from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #ifndef __HW_DEVICE_DRM_H__
 #define __HW_DEVICE_DRM_H__
@@ -84,7 +84,7 @@
   DLOGE("ioctl %s, device = %d errno = %d, desc = %s", #ioctl, type, errno, strerror(errno))
 
 #define UI_FBID_LIMIT 4
-#define VIDEO_FBID_LIMIT 16
+#define VIDEO_FBID_LIMIT 36
 #define OFFLINE_ROTATOR_FBID_LIMIT 2
 
 using sde_drm::DRMPowerMode;
@@ -105,6 +105,9 @@ class HWDeviceDRM : public HWInterface {
   void GetDRMDisplayToken(sde_drm::DRMDisplayToken *token) const;
   bool IsPrimaryDisplay() const { return hw_panel_info_.is_primary_panel; }
   virtual PanelFeaturePropertyIntf *GetPanelFeaturePropertyIntf() { return nullptr; }
+  virtual DisplayError GetPanelBrightnessBasePath(std::string *base_path) const {
+    return kErrorNotSupported;
+  }
 
  protected:
   // From HWInterface
@@ -128,12 +131,12 @@ class HWDeviceDRM : public HWInterface {
   virtual DisplayError Flush(HWLayers *hw_layers);
   virtual DisplayError GetPPFeaturesVersion(PPFeatureVersion *vers);
   virtual DisplayError SetPPFeatures(PPFeaturesConfig *feature_list);
-  virtual DisplayError DelayFirstCommit() { return kErrorNotSupported; };
   // This API is no longer supported, expectation is to call the correct API on HWEvents
   virtual DisplayError SetVSyncState(bool enable);
   virtual void SetIdleTimeoutMs(uint32_t timeout_ms);
   virtual DisplayError SetDisplayMode(const HWDisplayMode hw_display_mode);
   virtual DisplayError SetRefreshRate(uint32_t refresh_rate);
+  virtual DisplayError GetConfigIndexForFps(uint32_t refresh_rate, uint32_t *config);
   virtual DisplayError SetPanelBrightness(int level) { return kErrorNotSupported; }
   virtual DisplayError GetHWScanInfo(HWScanInfo *scan_info);
   virtual DisplayError GetVideoFormat(uint32_t config_index, uint32_t *video_format);
@@ -152,9 +155,22 @@ class HWDeviceDRM : public HWInterface {
   virtual void PopulateHWPanelInfo();
   virtual DisplayError SetDppsFeature(void *payload, size_t size) { return kErrorNotSupported; }
   virtual DisplayError GetDppsFeatureInfo(void *payload, size_t size) { return kErrorNotSupported; }
-  virtual DisplayError TeardownConcurrentWriteback(void) { return kErrorNotSupported; }
-  virtual DisplayError HandleSecureEvent(SecureEvent secure_event, HWLayers *hw_layers) {
-    return kErrorNotSupported;
+  virtual DisplayError HandleSecureEvent(SecureEvent secure_event, const HWQosData &qos_data) {
+    switch (secure_event) {
+      case kTUITransitionPrepare:
+      case kTUITransitionUnPrepare:
+        tui_state_ = kTUIStateInProgress;
+        break;
+      case kTUITransitionStart:
+        tui_state_ = kTUIStateStart;
+        break;
+      case kTUITransitionEnd:
+        tui_state_ = kTUIStateEnd;
+        break;
+      default:
+        break;
+    }
+    return kErrorNone;
   }
   virtual DisplayError ControlIdlePowerCollapse(bool enable, bool synchronous) {
     return kErrorNotSupported;
@@ -166,14 +182,23 @@ class HWDeviceDRM : public HWInterface {
                                                     uint8_t *out_data);
   virtual DisplayError SetFrameTrigger(FrameTriggerMode mode) { return kErrorNotSupported; }
   virtual DisplayError SetBLScale(uint32_t level) { return kErrorNotSupported; }
-  virtual DisplayError GetPanelBrightnessBasePath(std::string *base_path) {
+  virtual DisplayError SetBlendSpace(const PrimariesTransfer &blend_space);
+  virtual DisplayError EnableSelfRefresh() { return kErrorNotSupported; }
+  virtual DisplayError GetFeatureSupportStatus(const HWFeature feature, uint32_t *status) {
     return kErrorNotSupported;
   }
-  virtual DisplayError SetBlendSpace(const PrimariesTransfer &blend_space);
+  virtual DisplayError CancelDeferredPowerMode();
 
   enum {
     kHWEventVSync,
     kHWEventBlank,
+  };
+
+  enum TUIState {
+    kTUIStateNone,
+    kTUIStateStart,
+    kTUIStateInProgress,
+    kTUIStateEnd,
   };
 
   static const int kMaxStringLength = 1024;
@@ -222,6 +247,10 @@ class HWDeviceDRM : public HWInterface {
   void SetQOSData(const HWQosData &qos_data);
   void DumpHWLayers(HWLayers *hw_layers);
   bool IsFullFrameUpdate(const HWLayersInfo &hw_layer_info);
+  DisplayError GetDRMPowerMode(const HWPowerState &power_state, DRMPowerMode *drm_power_mode);
+  void SetTUIState();
+  void GetTopologySplit(HWTopology hw_topology, uint32_t *split_number);
+  virtual DisplayError TeardownConcurrentWriteback(void) { return kErrorNotSupported; }
 
   class Registry {
    public:
@@ -271,9 +300,11 @@ class HWDeviceDRM : public HWInterface {
   uint32_t current_mode_index_ = 0;
   sde_drm::DRMConnectorInfo connector_info_ = {};
   bool first_cycle_ = true;
+  bool first_null_cycle_ = true;
   HWMixerAttributes mixer_attributes_ = {};
   std::vector<sde_drm::DRMSolidfillStage> solid_fills_ {};
   bool secure_display_active_ = false;
+  TUIState tui_state_ = kTUIStateNone;
   uint64_t debug_dump_count_ = 0;
   bool synchronous_commit_ = false;
   uint32_t topology_control_ = 0;
@@ -282,20 +313,20 @@ class HWDeviceDRM : public HWInterface {
   bool reset_output_fence_offset_ = false;
   uint64_t bit_clk_rate_ = 0;
   bool update_mode_ = false;
-  bool pending_doze_ = false;
+  HWPowerState pending_power_state_ = kPowerStateNone;
   uint32_t video_mode_index_ = 0;
   uint32_t cmd_mode_index_ = 0;
   bool switch_mode_valid_ = false;
   bool doze_poms_switch_done_ = false;
   bool pending_poms_switch_ = false;
   bool active_ = false;
+  bool secure_inactive_pending_commit_ = false;
   PrimariesTransfer blend_space_ = {};
   DRMPowerMode last_power_mode_ = DRMPowerMode::OFF;
   uint32_t dest_scaler_blocks_used_ = 0;  // Dest scaler blocks in use by this HWDeviceDRM instance.
   // Destination scaler blocks in use by all HWDeviceDRM instances.
   static std::atomic<uint32_t> hw_dest_scaler_blocks_used_;
-  bool null_display_commit_ = false;
-  bool delay_first_commit_ = false;
+  static bool planes_reset_cache_;
 
  private:
   void SetDisplaySwitchMode(uint32_t index);

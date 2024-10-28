@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2019, 2021, The Linux Foundation. All rights reserved.
+* Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -83,8 +83,7 @@ int DRMAtomicReq::Perform(DRMOps opcode, uint32_t obj_id, ...) {
     case DRMOps::PLANE_SET_EXCL_RECT:
     case DRMOps::PLANE_SET_INVERSE_PMA:
     case DRMOps::PLANE_SET_DGM_CSC_CONFIG:
-    case DRMOps::PLANE_SET_POST_PROC:
-    case DRMOps::PLANE_SET_SSPP_LAYOUT: {
+    case DRMOps::PLANE_SET_POST_PROC: {
       drm_mgr_->GetPlaneMgr()->Perform(opcode, obj_id, drm_atomic_req_, args);
     } break;
     case DRMOps::CRTC_SET_POST_PROC:
@@ -107,7 +106,10 @@ int DRMAtomicReq::Perform(DRMOps opcode, uint32_t obj_id, ...) {
     case DRMOps::CRTC_SET_IDLE_TIMEOUT:
     case DRMOps::CRTC_SET_DEST_SCALER_CONFIG:
     case DRMOps::CRTC_SET_CAPTURE_MODE:
-    case DRMOps::CRTC_SET_IDLE_PC_STATE: {
+    case DRMOps::CRTC_SET_IDLE_PC_STATE:
+    case DRMOps::CRTC_SET_CACHE_STATE:
+    case DRMOps::CRTC_SET_VM_REQ_STATE:
+    case DRMOps::CRTC_RESET_CACHE: {
       drm_mgr_->GetCrtcMgr()->Perform(opcode, obj_id, drm_atomic_req_, args);
     } break;
     case DRMOps::CONNECTOR_SET_CRTC:
@@ -132,6 +134,12 @@ int DRMAtomicReq::Perform(DRMOps opcode, uint32_t obj_id, ...) {
     case DRMOps::DPPS_COMMIT_FEATURE: {
       drm_mgr_->GetDppsMgrIntf()->CommitDppsFeatures(drm_atomic_req_, token_);
     } break;
+    case DRMOps::PLANES_RESET_CACHE: {
+      drm_mgr_->GetPlaneMgr()->ResetCache(drm_atomic_req_, obj_id);
+    } break;
+    case DRMOps::PLANES_RESET_LUT: {
+      drm_mgr_->GetPlaneMgr()->ResetPlanesLUT(drm_atomic_req_);
+    } break;
     case DRMOps::COMMIT_PANEL_FEATURES: {
       drm_mgr_->GetPanelFeatureMgrIntf()->CommitPanelFeatures(drm_atomic_req_, token_);
     } break;
@@ -147,7 +155,6 @@ int DRMAtomicReq::Validate() {
   // because we just want to validate, not actually mark planes as removed
   drm_mgr_->GetPlaneMgr()->UnsetUnusedResources(token_.crtc_id, false/*is_commit*/,
                                                 drm_atomic_req_);
-
   int ret = drmModeAtomicCommit(fd_, drm_atomic_req_,
                                 DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_TEST_ONLY, nullptr);
   if (ret) {

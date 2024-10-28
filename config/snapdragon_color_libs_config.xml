@@ -1,3 +1,4 @@
+<?xml version='1.0' encoding='utf-8'?>
 <!--
 Copyright (c) 2020, The Linux Foundation. All rights reserved.
 
@@ -26,32 +27,9 @@ WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 -->
-<manifest version="1.0" type="device">
-    <hal format="hidl">
-        <name>vendor.qti.hardware.display.composer</name>
-        <transport>hwbinder</transport>
-        <version>3.0</version>
-        <interface>
-            <name>IQtiComposer</name>
-            <instance>default</instance>
-        </interface>
-    </hal>
-    <hal format="hidl">
-        <name>android.hardware.graphics.composer</name>
-        <transport>hwbinder</transport>
-        <version>2.4</version>
-        <interface>
-            <name>IComposer</name>
-            <instance>default</instance>
-        </interface>
-    </hal>
-    <hal format="hidl">
-        <name>vendor.display.config</name>
-        <transport>hwbinder</transport>
-        <version>2.0</version>
-        <interface>
-            <name>IDisplayConfig</name>
-            <instance>default</instance>
-        </interface>
-    </hal>
-</manifest>
+<StcLibraries>
+    <Library>
+        <Name>libsnapdragoncolor-qdcm.so</Name>
+        <ProcessingOrder>1</ProcessingOrder>
+    </Library>
+</StcLibraries>

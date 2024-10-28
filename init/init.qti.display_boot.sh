@@ -1,5 +1,5 @@
 #!/vendor/bin/sh
-# Copyright (c) 2021, The Linux Foundation. All rights reserved.
+# Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
@@ -30,7 +30,7 @@
 
 # Changes from Qualcomm Innovation Center are provided under the following license:
 #
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the
@@ -69,30 +69,83 @@ else
     soc_hwid=`cat /sys/devices/system/soc/soc0/id`
 fi
 
+if [ -f /sys/devices/soc0/platform_subtype_id ]; then
+    subtype_id=`cat /sys/devices/soc0/platform_subtype_id`
+fi
+
+# Enable camera smooth for all targets
+setprop vendor.display.enable_camera_smooth 1
+
 case "$target" in
-    "bengal")
-    # Set property to differentiate bengal and khaje
-    # Soc Id for khaje is 518
-    # Soc Id for khaje APQ is 561
-    # Soc Id for khaje Gaming is 585 and IOT is 586
+    "lahaina")
+    #Set property to differentiate Lahaina & Shima
+    #SOC ID for Lahaina is 415, Lahaina P is 439, Lahaina-ATP is 456
     case "$soc_hwid" in
-        518|561|585|586)
-        # Set property for khaje
-        setprop vendor.display.disable_layer_stitch 1
+        415|439|456)
+        # Set property for lahaina
+        setprop vendor.display.target.version 1
+        setprop vendor.display.enable_posted_start_dyn 2
+        setprop vendor.display.enable_perf_hint_large_comp_cycle 0
+        setprop vendor.display.enable_allow_idle_fallback 1
+        # Set property for HHG
+		case "$subtype_id" in
+			1|2)
+				setprop vendor.display.disable_system_load_check 1
+			;;
+		esac
+        ;;
+        450)
+        # Set property for shima
+        setprop vendor.display.target.version 2
+        setprop vendor.display.enable_perf_hint_large_comp_cycle 0
+        setprop vendor.display.enable_posted_start_dyn 1
+        setprop vendor.display.enable_qsync_idle 1
+        setprop vendor.display.enable_allow_idle_fallback 1
+        ;;
+        # SOC ID for Yupik is 475, Yupik P is 499, Faroe is 515
+        # SOC ID for Kodiak IOT 497, Kodiak IOT with modem 498
+        475|497|498|499|515)
+        # Set property for Yupik
+        setprop vendor.display.target.version 2
+        setprop vendor.display.enable_posted_start_dyn 2
+        setprop vendor.display.enable_perf_hint_large_comp_cycle 0
+        setprop vendor.display.enable_qsync_idle 1
+        setprop vendor.display.enable_allow_idle_fallback 1
         setprop vendor.display.enable_rounded_corner 1
         setprop vendor.display.disable_rounded_corner_thread 0
         setprop vendor.display.enable_rc_support 1
-        setprop vendor.display.enable_perf_hint_large_comp_cycle 1
-        ;;
-    esac
-    ;;
-    "lito")
-    # Set property to differentiate lito and lagoon
-    case "$soc_hwid" in
-        434|459)
-        #Set property for lagoon
         setprop vendor.display.enable_hdr10_gpu_target 1
         ;;
     esac
     ;;
+    "holi")
+    #Set property to differentiate Holi & Blair
+    #SOC ID for Holi is 454 and for Blair is 507
+    case "$soc_hwid" in
+        454)
+        # Set property for holi
+        setprop vendor.display.target.version 2
+        setprop vendor.display.disable_offline_rotator 0
+        setprop vendor.display.disable_rotator_ubwc 1
+        setprop vendor.display.enable_perf_hint_large_comp_cycle 0
+        setprop vendor.display.enable_posted_start_dyn 1
+        setprop vendor.display.enable_allow_idle_fallback 1
+        setprop vendor.display.enable_rc_support 1
+        ;;
+        507|565|578|628|647)
+        # Set property for blair
+        # SOC ID for blair APQ is 565
+        # SOC Id for Blair Lite is 578
+        # SOC ID for Blair APQ is 628
+        # SOC ID for Blair LTE is 647
+        setprop vendor.display.target.version 3
+        setprop vendor.display.disable_offline_rotator 0
+        setprop vendor.display.disable_rotator_ubwc 1
+        setprop vendor.display.enable_perf_hint_large_comp_cycle 0
+        setprop vendor.display.enable_posted_start_dyn 1
+        setprop vendor.display.enable_allow_idle_fallback 1
+        setprop vendor.display.enable_rc_support 1
+        setprop vendor.display.enable_async_powermode 1
+        ;;
+    esac
 esac

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014 - 2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014 - 2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -22,6 +22,38 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+Changes from Qualcomm Innovation Center are provided under the following license:
+Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the
+disclaimer below) provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+    * Neither the name of Qualcomm Innovation Center, Inc. nor the
+      names of its contributors may be used to endorse or promote
+      products derived from this software without specific prior
+      written permission.
+
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 /*! @file display_interface.h
   @brief Interface file for display device which represents a physical panel or an output buffer
   where contents can be rendered.
@@ -30,46 +62,10 @@
   the target device. Each display device represents a unique display target which may be either a
   physical panel or an output buffer..
 */
-
-/*
-* Changes from Qualcomm Innovation Center are provided under the following license:
-*
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*    * Redistributions of source code must retain the above copyright
-*      notice, this list of conditions and the following disclaimer.
-*
-*    * Redistributions in binary form must reproduce the above
-*      copyright notice, this list of conditions and the following
-*      disclaimer in the documentation and/or other materials provided
-*      with the distribution.
-*
-*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*      contributors may be used to endorse or promote products derived
-*      from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
-
 #ifndef __DISPLAY_INTERFACE_H__
 #define __DISPLAY_INTERFACE_H__
 
+#include <private/snapdragon_color_intf.h>
 #include <stdint.h>
 #include <string>
 #include <vector>
@@ -164,6 +160,18 @@ enum ContentQuality {
   kContentQualityMax,
 };
 
+
+/*! @brief This enum represents the type of the content.
+
+  @sa DisplayInterface::SetDetailEnhancerData
+*/
+enum DeContentType {
+  kContentTypeUnknown,
+  kContentTypeVideo,
+  kContentTypeGraphics,
+  kContentTypeMax,
+};
+
 /*! @brief This enum represents the display port.
 
   @sa DisplayInterface::GetDisplayPort
@@ -192,8 +200,18 @@ enum DisplayEvent {
 
 /*! @brief This enum represents the secure events received by Display HAL. */
 enum SecureEvent {
-  kSecureDisplayStart,  // Client sets it to notify secure display session start
-  kSecureDisplayEnd,    // Client sets it to notify secure display session end
+  kSecureDisplayStart,      // Client sets it to notify secure display session start
+  kSecureDisplayEnd,        // Client sets it to notify secure display session end
+  kTUITransitionPrepare,    // Client sets it to notify non targetted display to forcefully disable
+                            // the display pipeline.
+  kTUITransitionStart,      // Client sets it to notify start of TUI Transition to release
+                            // the display hardware to trusted VM. Client calls only for
+                            // target displays where TUI to be displayed
+  kTUITransitionEnd,        // Client sets it to notify end of TUI Transition to acquire
+                            // the display hardware from trusted VM. Client calls only for
+                            // target displays where TUI to be displayed
+  kTUITransitionUnPrepare,  // Client sets it to notify non targetted display to enable/disable the
+                            // display pipeline based on pending power state
   kSecureEventMax,
 };
 
@@ -269,7 +287,7 @@ struct DisplayConfigVariableInfo : public DisplayConfigGroupInfo {
   bool operator==(const DisplayConfigVariableInfo& info) const {
     return ((x_pixels == info.x_pixels) && (y_pixels == info.y_pixels) && (x_dpi == info.x_dpi) &&
             (y_dpi == info.y_dpi) && (fps == info.fps) && (vsync_period_ns == info.vsync_period_ns)
-            && (is_yuv == info.is_yuv));
+            && (is_yuv == info.is_yuv) && (smart_panel == info.smart_panel));
   }
 };
 
@@ -304,6 +322,18 @@ struct DisplayDetailEnhancerData {
   ScalingFilterConfig filter_config = kFilterEdgeDirected;
                                       // Y/RGB filter configuration
   uint32_t de_blend = 0;              // DE Unsharp Mask blend between High and Low frequencies
+  DeContentType content_type = kContentTypeUnknown;  // Specifies content type
+};
+
+/*! @brief This enum represents the supported display features that needs to be queried
+
+  @sa DisplayInterface::SupportedDisplayFeature
+*/
+enum SupportedDisplayFeature {
+  kSupportedModeSwitch,
+  kDestinationScalar,
+  kCwbCrop,
+  kDedicatedCwb,
 };
 
 /*! @brief Display device event handler implemented by the client.
@@ -475,6 +505,15 @@ class DisplayInterface {
   */
   virtual DisplayError GetConfig(uint32_t index, DisplayConfigVariableInfo *variable_info) = 0;
 
+  /*! @brief Method to get real configuration for variable properties of the display device.
+
+    @param[in] index index of the mode
+    @param[out] variable_info \link DisplayConfigVariableInfo \endlink
+
+    @return \link DisplayError \endlink
+  */
+  virtual DisplayError GetRealConfig(uint32_t index, DisplayConfigVariableInfo *variable_info) = 0;
+
   /*! @brief Method to get index of active configuration of the display device.
 
     @param[out] index index of the mode corresponding to variable properties.
@@ -559,6 +598,16 @@ class DisplayInterface {
     @return \link DisplayError \endlink
   */
   virtual DisplayError DisablePartialUpdateOneFrame() = 0;
+
+  /*! @brief Method to get unaligned dimensions of output buffer.
+
+    @param[in] CWB tap-point set by client.
+    @param[out] unaligned width and height of output buffer.
+
+    @return \link void \endlink
+  */
+  virtual DisplayError GetCwbBufferResolution(CwbTapPoint cwb_tappoint, uint32_t *x_pixels,
+                                              uint32_t *y_pixels) = 0;
 
   /*! @brief Method to set the mode of the primary display.
 
@@ -844,11 +893,11 @@ class DisplayInterface {
 
     @param[in] secure_event \link SecureEvent \endlink
 
-    @param[inout] layer_stack \link LayerStack \endlink
+    @param[out] needs_refresh Notifies the caller whether it needs screen refresh after this call
 
     @return \link DisplayError \endlink
   */
-  virtual DisplayError HandleSecureEvent(SecureEvent secure_event, LayerStack *layer_stack) = 0;
+  virtual DisplayError HandleSecureEvent(SecureEvent secure_event, bool *needs_refresh) = 0;
 
   /*! @brief Method to set dpps ad roi.
 
@@ -881,11 +930,6 @@ class DisplayInterface {
     @return true if support sspp tonemap.
   */
   virtual bool IsSupportSsppTonemap() = 0;
-
-  /*! @brief Method to free concurrent writeback resoures for primary display.
-    @return \link DisplayError \endlink
-  */
-  virtual DisplayError TeardownConcurrentWriteback(void) = 0;
 
   /*! @brief Method to set frame trigger mode for primary display.
 
@@ -982,17 +1026,46 @@ class DisplayInterface {
   */
   virtual DisplayError GetQSyncMode(QSyncMode *qsync_mode) = 0;
 
+  /*! @brief Method to set the color mode to STC
+
+    @param[in] color_mode Mode attributes which needs to be set.
+
+    @return \link DisplayError \endlink
+  */
+  virtual DisplayError SetStcColorMode(const snapdragoncolor::ColorMode &color_mode) = 0;
+
+  /*! @brief Method to query the color mode list from STC.
+
+    @param[out] pointer of mode list
+
+    @return \link DisplayError \endlink
+  */
+  virtual DisplayError GetStcColorModes(snapdragoncolor::ColorModeList *mode_list) = 0;
+
+  /*! @brief Method to retrieve info on a specific display feature
+
+    @param[out] pointer to the response
+
+    @return \link DisplayError \endlink
+  */
+  virtual DisplayError IsSupportedOnDisplay(SupportedDisplayFeature feature,
+                                            uint32_t *supported) = 0;
+
   /*! @brief Method to clear scaler LUTs.
 
     @return \link DisplayError \endlink
   */
   virtual DisplayError ClearLUTs() = 0;
 
-  /*! @brief Method to skip first commit.
+  /*! @brief Method to notify the stc library that connect/disconnect QDCM tool.
+
+    @param[in] connect or disconnect
 
     @return \link DisplayError \endlink
   */
-  virtual DisplayError DelayFirstCommit() = 0;
+  virtual DisplayError NotifyDisplayCalibrationMode(bool in_calibration) = 0;
+
+  virtual DisplayError TeardownConcurrentWriteback(void) = 0;
 
  protected:
   virtual ~DisplayInterface() { }

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -73,6 +73,10 @@ using sde_drm::DRMPowerMode;
 using sde_drm::DRMColorspace;
 
 namespace sdm {
+
+static uint64_t timeval_to_ms(const struct timeval &tv) {
+  return (UINT64(tv.tv_sec) * 1000ull + UINT64(tv.tv_usec) / 1000ull);
+}
 
 static int32_t GetEOTF(const GammaTransfer &transfer) {
   int32_t hdr_transfer = -1;
@@ -164,6 +168,18 @@ DisplayError HWTVDRM::GetConfigIndex(char *mode, uint32_t *index) {
   return kErrorNone;
 }
 
+DisplayError HWTVDRM::Flush(HWLayers *hw_layers) {
+  if (hw_panel_info_.hdr_enabled) {
+    memset(&hdr_metadata_, 0, sizeof(hdr_metadata_));
+    hdr_metadata_.hdr_supported = 1;
+    hdr_metadata_.hdr_state = HDR_DISABLE;
+    drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_HDR_METADATA, token_.conn_id,
+                              &hdr_metadata_);
+  }
+
+  return HWDeviceDRM::Flush(hw_layers);
+}
+
 DisplayError HWTVDRM::Deinit() {
   if (hw_panel_info_.hdr_enabled) {
     memset(&hdr_metadata_, 0, sizeof(hdr_metadata_));
@@ -201,6 +217,12 @@ DisplayError HWTVDRM::PowerOff(bool teardown) {
 
   if (first_cycle_) {
     return kErrorNone;
+  }
+
+  if (tui_state_ != kTUIStateNone && tui_state_ != kTUIStateEnd) {
+    DLOGI("Request deferred TUI state %d", tui_state_);
+    pending_power_state_ = kPowerStateOff;
+    return kErrorDeferred;
   }
 
   if (teardown) {
@@ -373,11 +395,11 @@ DisplayError HWTVDRM::UpdateHDRMetaData(HWLayers *hw_layers) {
     // metadata. This will be replaced with an idle timer implementation in the future.
     if (reset_hdr_flag_) {
       gettimeofday(&hdr_reset_end_, NULL);
-      float hdr_reset_time_start = ((hdr_reset_start_.tv_sec * 1000) +
-                                    (hdr_reset_start_.tv_usec / 1000));
-      float hdr_reset_time_end = ((hdr_reset_end_.tv_sec * 1000) + (hdr_reset_end_.tv_usec / 1000));
+      const uint64_t hdr_reset_start_ms = timeval_to_ms(hdr_reset_start_);
+      const uint64_t hdr_reset_end_ms = timeval_to_ms(hdr_reset_end_);
+      const uint64_t hdr_reset_duration_ms = hdr_reset_end_ms - hdr_reset_start_ms;
 
-      if (((hdr_reset_time_end - hdr_reset_time_start) / 1000) >= MIN_HDR_RESET_WAITTIME) {
+      if (hdr_reset_duration_ms >= UINT64(MIN_HDR_RESET_WAITTIME) * 1000ull) {
         memset(&hdr_metadata_, 0, sizeof(hdr_metadata_));
         hdr_metadata_.hdr_supported = 1;
         hdr_metadata_.hdr_state = HDR_DISABLE;
@@ -446,6 +468,12 @@ DisplayError HWTVDRM::PowerOn(const HWQosData &qos_data, shared_ptr<Fence> *rele
     drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_CRTC, token_.conn_id, token_.crtc_id);
     drmModeModeInfo current_mode = connector_info_.modes[current_mode_index_].mode;
     drm_atomic_intf_->Perform(DRMOps::CRTC_SET_MODE, token_.crtc_id, &current_mode);
+    if (hw_panel_info_.hdr_enabled) {
+      hdr_metadata_.hdr_supported = 1;
+      hdr_metadata_.hdr_state = HDR_DISABLE;
+      drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_HDR_METADATA, token_.conn_id,
+                                &hdr_metadata_);
+    }
   }
 
   return HWDeviceDRM::PowerOn(qos_data, release_fence);

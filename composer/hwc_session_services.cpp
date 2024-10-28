@@ -62,6 +62,9 @@ int MapDisplayType(DispType dpy) {
     case DispType::kVirtual:
       return qdutils::DISPLAY_VIRTUAL;
 
+    case DispType::kBuiltIn2:
+      return qdutils::DISPLAY_BUILTIN_2;
+
     default:
       break;
   }
@@ -406,14 +409,23 @@ int HWCSession::DisplayConfigImpl::ControlPartialUpdate(DispType dpy, bool enabl
 }
 
 int HWCSession::ToggleScreenUpdate(bool on) {
-  SEQUENCE_WAIT_SCOPE_LOCK(locker_[HWC_DISPLAY_PRIMARY]);
+  hwc2_display_t active_builtin_disp_id = GetActiveBuiltinDisplay();
+
+  if (active_builtin_disp_id >= HWCCallbacks::kNumDisplays) {
+    DLOGE("No active displays");
+    return -EINVAL;
+  }
+  SEQUENCE_WAIT_SCOPE_LOCK(locker_[active_builtin_disp_id]);
 
   int error = -EINVAL;
-  if (hwc_display_[HWC_DISPLAY_PRIMARY]) {
-    error = hwc_display_[HWC_DISPLAY_PRIMARY]->ToggleScreenUpdates(on);
+  if (hwc_display_[active_builtin_disp_id]) {
+    error = hwc_display_[active_builtin_disp_id]->ToggleScreenUpdates(on);
     if (error) {
-      DLOGE("Failed to toggle screen updates = %d. Error = %d", on, error);
+      DLOGE("Failed to toggle screen updates = %d. Display = %" PRIu64 ", Error = %d", on,
+          active_builtin_disp_id, error);
     }
+  } else {
+    DLOGW("Display = %" PRIu64 " is not connected.", active_builtin_disp_id);
   }
 
   return error;
@@ -750,16 +762,20 @@ int HWCSession::DisplayConfigImpl::SetPowerMode(uint32_t disp_id,
   shared_ptr<Fence> acquire_fence = nullptr;
   int32_t dataspace = 0;
   hwc_region_t damage = {};
-  VsyncPeriodNanos vsync_period = 16600000;
   hwc_session_->hwc_display_[disp_id]->GetClientTarget(
                                  target, acquire_fence, dataspace, damage);
   hwc_session_->hwc_display_[dummy_disp_id]->SetClientTarget(
                                        target, acquire_fence, dataspace, damage);
 
-
-
-  hwc_session_->hwc_display_[disp_id]->GetDisplayVsyncPeriod(&vsync_period);
-  hwc_session_->hwc_display_[dummy_disp_id]->SetDisplayVsyncPeriod(vsync_period);
+  // Initialize the variable config map of dummy display using map of real display.
+  // Pass the real display's last active config index to dummy display.
+  std::map<uint32_t, DisplayConfigVariableInfo> variable_config_map;
+  int active_config_index = -1;
+  uint32_t num_configs = 0;
+  hwc_session_->hwc_display_[disp_id]->GetConfigInfo(&variable_config_map, &active_config_index,
+                                                     &num_configs);
+  hwc_session_->hwc_display_[dummy_disp_id]->SetConfigInfo(variable_config_map,
+                                                           active_config_index, num_configs);
 
   hwc_session_->locker_[dummy_disp_id].Unlock();  // Release the dummy display.
   // Release the display's power-state transition var read lock.
@@ -991,18 +1007,18 @@ int HWCSession::DisplayConfigImpl::SetCWBOutputBuffer(uint32_t disp_id,
                                                       const DisplayConfig::Rect rect,
                                                       bool post_processed,
                                                       const native_handle_t *buffer) {
-  if (!callback_.lock() || !buffer) {
-    DLOGE("Invalid parameters");
+  if (!callback_.lock()) {
+    DLOGE("Callback_ has not yet been initialized.");
+    return -1;
+  }
+
+  if (!buffer) {
+    DLOGE("Buffer is null.");
     return -1;
   }
 
   if (disp_id != UINT32(DisplayConfig::DisplayType::kPrimary)) {
     DLOGE("Only supported for primary display at present.");
-    return -1;
-  }
-
-  if (rect.left || rect.top || rect.right || rect.bottom) {
-    DLOGE("Cropping rectangle is not supported.");
     return -1;
   }
 
@@ -1026,12 +1042,22 @@ int HWCSession::DisplayConfigImpl::SetCWBOutputBuffer(uint32_t disp_id,
     }
   }
 
-  return hwc_session_->cwb_.PostBuffer(callback_, post_processed,
-                                       native_handle_clone(buffer));
+  CwbConfig cwb_config = {};
+  cwb_config.tap_point = static_cast<CwbTapPoint>(post_processed);
+  LayerRect &roi = cwb_config.cwb_roi;
+  roi.left = FLOAT(rect.left);
+  roi.top = FLOAT(rect.top);
+  roi.right = FLOAT(rect.right);
+  roi.bottom = FLOAT(rect.bottom);
+
+  DLOGI("CWB config passed by cwb_client : tappoint %d  CWB_ROI : (%f %f %f %f)",
+        cwb_config.tap_point, roi.left, roi.top, roi.right, roi.bottom);
+
+  return hwc_session_->cwb_.PostBuffer(callback_, cwb_config, native_handle_clone(buffer));
 }
 
 int32_t HWCSession::CWB::PostBuffer(std::weak_ptr<DisplayConfig::ConfigCallback> callback,
-                                    bool post_processed, const native_handle_t *buffer) {
+                                    const CwbConfig &cwb_config, const native_handle_t *buffer) {
   SCOPE_LOCK(queue_lock_);
 
   // Ensure that async task runs only until all queued CWB requests have been fulfilled.
@@ -1040,7 +1066,7 @@ int32_t HWCSession::CWB::PostBuffer(std::weak_ptr<DisplayConfig::ConfigCallback>
   // currently running async task will automatically desolve without processing more requests.
   bool post_future = !queue_.size();
 
-  QueueNode *node = new QueueNode(callback, post_processed, buffer);
+  QueueNode *node = new QueueNode(callback, cwb_config, buffer);
   queue_.push(node);
 
   if (post_future) {
@@ -1069,6 +1095,7 @@ void HWCSession::CWB::ProcessRequests() {
     {
       SCOPE_LOCK(queue_lock_);
       if (!queue_.size()) {
+        DLOGI("CWB buffer is empty. No pending CWB requests found.");
         break;
       }
 
@@ -1082,18 +1109,26 @@ void HWCSession::CWB::ProcessRequests() {
     // Wait for previous commit to finish before configuring next buffer.
     {
       SEQUENCE_WAIT_SCOPE_LOCK(locker);
-      if (hwc_display->SetReadbackBuffer(node->buffer, nullptr, node->post_processed,
-                                         kCWBClientExternal) != HWC2::Error::None) {
+
+      HWC2::Error error = hwc_display->SetReadbackBuffer(node->buffer, nullptr, node->cwb_config,
+                                                         kCWBClientExternal);
+      if (error != HWC2::Error::None) {
         DLOGE("CWB buffer could not be set.");
         status = -1;
+      } else {
+        DLOGI("Successfully configured CWB buffer.");
       }
     }
 
     if (!status) {
       hwc_session_->callbacks_.Refresh(HWC_DISPLAY_PRIMARY);
 
-      std::unique_lock<std::mutex> lock(mutex_);
-      cv_.wait(lock);
+      // Mutex scope
+      // Wait for the signal from commit thread to retrieve the CWB release fence
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock);
+      }
 
       shared_ptr<Fence> release_fence = nullptr;
       // Mutex scope
@@ -1113,6 +1148,7 @@ void HWCSession::CWB::ProcessRequests() {
     // Notify client about buffer status and erase the node from pending request queue.
     std::shared_ptr<DisplayConfig::ConfigCallback> callback = node->callback.lock();
     if (callback) {
+      DLOGI("Notify the client about buffer status %d.", status);
       callback->NotifyCWBBufferDone(status, node->buffer);
     }
 
@@ -1126,8 +1162,10 @@ void HWCSession::CWB::ProcessRequests() {
     {
       SCOPE_LOCK(queue_lock_);
       queue_.pop();
+      DLOGI("Remove current CWB request from the pending request queue.");
 
       if (!queue_.size()) {
+        DLOGI("No pending cwb requests found in the queue.");
         break;
       }
     }
@@ -1259,14 +1297,79 @@ int HWCSession::DisplayConfigImpl::ControlQsyncCallback(bool enable) {
   return 0;
 }
 
-int HWCSession::DisplayConfigImpl::ControlIdleStatusCallback(bool enable) {
-  if (enable) {
-    hwc_session_->idle_callback_ = callback_;
-  } else {
-    hwc_session_->idle_callback_.reset();
+int HWCSession::DisplayConfigImpl::GetDisplayHwId(uint32_t disp_id, uint32_t *display_hw_id) {
+  int disp_idx = hwc_session_->GetDisplayIndex(disp_id);
+  if (disp_idx == -1) {
+    DLOGE("Invalid display = %d", disp_id);
+    return -EINVAL;
   }
 
-  return 0;
+  SCOPE_LOCK(hwc_session_->locker_[disp_id]);
+  if (!hwc_session_->hwc_display_[disp_idx]) {
+    DLOGW("Display %d is not connected.", disp_id);
+    return -EINVAL;
+  }
+
+  int error = -EINVAL;
+  // Supported for Built-In displays only.
+  if ((hwc_session_->map_info_primary_.client_id == disp_id) &&
+      (hwc_session_->map_info_primary_.disp_type == kBuiltIn)) {
+    if (hwc_session_->map_info_primary_.sdm_id >= 0) {
+      *display_hw_id = static_cast<uint32_t>(hwc_session_->map_info_primary_.sdm_id);
+      error = 0;
+    }
+    return error;
+  }
+
+  for (auto &info : hwc_session_->map_info_builtin_) {
+    if (disp_id == info.client_id) {
+      if (info.sdm_id >= 0) {
+        *display_hw_id = static_cast<uint32_t>(info.sdm_id);
+        error = 0;
+      }
+      return error;
+    }
+  }
+
+  return error;
+}
+
+int HWCSession::DisplayConfigImpl::SendTUIEvent(DispType dpy,
+                                                DisplayConfig::TUIEventType event_type) {
+  int disp_id = MapDisplayType(dpy);
+  switch(event_type) {
+    case DisplayConfig::TUIEventType::kPrepareTUITransition:
+      return hwc_session_->TUITransitionPrepare(disp_id);
+    case DisplayConfig::TUIEventType::kStartTUITransition:
+      return hwc_session_->TUITransitionStart(disp_id);
+    case DisplayConfig::TUIEventType::kEndTUITransition:
+      return hwc_session_->TUITransitionEnd(disp_id);
+    default:
+      DLOGE("Invalid event %d", event_type);
+      return -EINVAL;
+  }
+}
+
+int HWCSession::GetSupportedDisplayRefreshRates(int disp_id,
+                                                std::vector<uint32_t> *supported_refresh_rates) {
+  int disp_idx = GetDisplayIndex(disp_id);
+  if (disp_idx == -1) {
+    DLOGE("Invalid display = %d", disp_id);
+    return -EINVAL;
+  }
+
+  SCOPE_LOCK(locker_[disp_idx]);
+
+  if (hwc_display_[disp_idx]) {
+    return hwc_display_[disp_idx]->GetSupportedDisplayRefreshRates(supported_refresh_rates);
+  }
+  return -EINVAL;
+}
+
+int HWCSession::DisplayConfigImpl::GetSupportedDisplayRefreshRates(
+    DispType dpy, std::vector<uint32_t> *supported_refresh_rates) {
+  return hwc_session_->GetSupportedDisplayRefreshRates(MapDisplayType(dpy),
+                                                       supported_refresh_rates);
 }
 
 int HWCSession::DisplayConfigImpl::IsRCSupported(uint32_t disp_id, bool *supported) {
@@ -1277,6 +1380,42 @@ int HWCSession::DisplayConfigImpl::IsRCSupported(uint32_t disp_id, bool *support
   *supported = val ? true: false;
 
   return 0;
+}
+
+int HWCSession::DisplayConfigImpl::IsSupportedConfigSwitch(uint32_t disp_id, uint32_t config,
+                                                         bool *supported) {
+  int disp_idx = hwc_session_->GetDisplayIndex(disp_id);
+  if (disp_idx == -1) {
+    DLOGE("Invalid display = %d", disp_id);
+    return -EINVAL;
+  }
+
+  SCOPE_LOCK(hwc_session_->locker_[disp_idx]);
+  if (!hwc_session_->hwc_display_[disp_idx]) {
+    DLOGW("Display %d is not connected.", disp_id);
+    return -EINVAL;
+  }
+
+  *supported = hwc_session_->hwc_display_[disp_idx]->IsModeSwitchAllowed(config);
+
+  return 0;
+}
+
+int HWCSession::DisplayConfigImpl::ControlIdleStatusCallback(bool enable) {
+  if (enable) {
+    hwc_session_->idle_callback_ = callback_;
+  } else {
+    hwc_session_->idle_callback_.reset();
+  }
+
+  return 0;
+}
+
+int HWCSession::DisplayConfigImpl::GetDisplayType(uint64_t physical_disp_id, DispType *disp_type) {
+  if (!disp_type) {
+    return -EINVAL;
+  }
+  return hwc_session_->GetDispTypeFromPhysicalId(physical_disp_id, disp_type);
 }
 
 int HWCSession::DisplayConfigImpl::AllowIdleFallback() {
@@ -1295,5 +1434,4 @@ int HWCSession::DisplayConfigImpl::AllowIdleFallback() {
   DLOGW("Display = %d is not connected.", HWC_DISPLAY_PRIMARY);
   return -ENODEV;
 }
-
 }  // namespace sdm

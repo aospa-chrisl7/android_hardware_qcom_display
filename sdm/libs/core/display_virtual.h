@@ -69,10 +69,10 @@ class DisplayVirtual : public DisplayBase {
   virtual DisplayError SetColorTransform(const uint32_t length, const double *color_transform) {
     return kErrorNone;
   }
-  virtual DisplayError TeardownConcurrentWriteback(void) { return kErrorNotSupported; }
   virtual DisplayError GetColorModeCount(uint32_t *mode_count);
   virtual DisplayError colorSamplingOn();
   virtual DisplayError colorSamplingOff();
+  virtual DisplayError TeardownConcurrentWriteback(void) { return kErrorNotSupported; }
 
  protected:
   float set_max_lum_ = -1.0;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2020, The Linux Foundation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -36,6 +36,8 @@
 #include "generic_intf.h"
 #include "generic_payload.h"
 
+#define SDE_HW_PU_USECASE 0x1000
+
 namespace sdm {
 
 struct RCInputConfig {
@@ -51,7 +53,6 @@ struct RCOutputConfig {
   int32_t top_height = 0;
   int32_t bottom_width = 0;
   int32_t bottom_height = 0;
-  bool rc_needs_full_roi = false;
 };
 
 // These value is to get the status of the mask
@@ -68,7 +69,7 @@ enum RCMaskStackStatus {
 
 struct RCMaskCfgState {
   RCMaskStackStatus rc_mask_state = kStatusIgnore;
-  bool rc_pu_full_roi = false;  // Unused, as driver is handling PU
+  bool rc_pu_full_roi = false;
 };
 
 // RC specific params as enum

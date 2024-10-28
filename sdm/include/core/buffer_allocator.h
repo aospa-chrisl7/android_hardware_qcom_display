@@ -36,6 +36,7 @@
 #ifndef __BUFFER_ALLOCATOR_H__
 #define __BUFFER_ALLOCATOR_H__
 
+#include <errno.h>
 #include <cstddef>
 #include "layer_buffer.h"
 
@@ -56,6 +57,8 @@ struct BufferConfig {
   bool secure_camera = false;                 //!< Specifies buffer to be allocated from specific
                                               //!< secure heap and with a specific alignment.
   bool gfx_client = false;                    //!< Specifies whether buffer is used by gfx.
+  bool trusted_ui = false;                    //!< Specifies buffer to be allocated from non-secure
+                                              //!< contiguous memory.
 };
 
 /*! @brief Holds the information about the allocated buffer.
@@ -102,9 +105,9 @@ class BufferAllocator {
 
     @param[in] buffer_info \link BufferInfo \endlink
 
-    @return \link DisplayError \endlink
+    @return \link int \endlink
   */
-  virtual DisplayError AllocateBuffer(BufferInfo *buffer_info) = 0;
+  virtual int AllocateBuffer(BufferInfo *buffer_info) = 0;
 
 
   /*! @brief Method to deallocate the ouput buffer.
@@ -113,9 +116,9 @@ class BufferAllocator {
 
     @param[in] buffer_info \link BufferInfo \endlink
 
-    @return \link DisplayError \endlink
+    @return \link int \endlink
   */
-  virtual DisplayError FreeBuffer(BufferInfo *buffer_info) = 0;
+  virtual int FreeBuffer(BufferInfo *buffer_info) = 0;
 
 
   /*! @brief Method to get the buffer size.
@@ -137,9 +140,9 @@ class BufferAllocator {
 
     @param[out] allocated_buffer_info \link AllocatedBufferInfo \endlink
 
-    @return \link DisplayError \endlink
+    @return \link int \endlink
   */
-  virtual DisplayError GetAllocatedBufferInfo(const BufferConfig &buffer_config,
+  virtual int GetAllocatedBufferInfo(const BufferConfig &buffer_config,
                                               AllocatedBufferInfo *allocated_buffer_info) = 0;
 
   /*
@@ -147,14 +150,14 @@ class BufferAllocator {
    * Input: AllocatedBufferInfo with a valid aligned width, aligned height, SDM format
    * Output: stride for each plane, offset of each plane from base, number of planes
    */
-  virtual DisplayError GetBufferLayout(const AllocatedBufferInfo &buf_info,
+  virtual int GetBufferLayout(const AllocatedBufferInfo &buf_info,
                                        uint32_t stride[4], uint32_t offset[4],
                                        uint32_t *num_planes) {
     (void) buf_info;
     (void) stride;
     (void) offset;
     (void) num_planes;
-    return kErrorNotSupported; }
+    return -ENOTSUP; }
 
  protected:
   virtual ~BufferAllocator() { }

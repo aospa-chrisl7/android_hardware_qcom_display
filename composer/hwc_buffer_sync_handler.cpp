@@ -27,7 +27,6 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <cassert>
 #include <errno.h>
 #include <sync/sync.h>
 #include <utils/constants.h>
@@ -47,28 +46,28 @@ HWCBufferSyncHandler::HWCBufferSyncHandler() {
   Fence::Set(this);
 }
 
-DisplayError HWCBufferSyncHandler::SyncWait(int fd, int timeout) {
+int HWCBufferSyncHandler::SyncWait(int fd, int timeout) {
   // Assume invalid fd as signaled.
   if (fd < 0) {
-    return kErrorNone;
+    return 0;
   }
 
-  int error = sync_wait(fd, timeout);
-  if (!error) {
-    return kErrorNone;
+  int error = 0;
+  if ((error = sync_wait(fd, timeout)) != 0) {
+    if (errno == ETIME) {
+      error = -ETIME;
+    }
+    if (timeout != 0) {
+      DLOGW("sync_wait fd = %d, timeout = %d ms, err = %d : %s", fd, timeout, errno,
+            strerror(errno));
+    }
+    return error;
   }
 
-  // Fence is not signaled yet.
-  if (errno == ETIME) {
-    return kErrorTimeOut;
-  }
-
-  DLOGW("sync_wait fd = %d, timeout = %d ms, err = %d : %s", fd, timeout, errno, strerror(errno));
-
-  return kErrorUndefined;
+  return 0;
 }
 
-DisplayError HWCBufferSyncHandler::SyncMerge(int fd1, int fd2, int *merged_fd) {
+int HWCBufferSyncHandler::SyncMerge(int fd1, int fd2, int *merged_fd) {
   // Caller owns fds, hence, if
   //  one of the fence fd is invalid, create dup of valid fd and set to merged fd.
   //  both fence fds are same, create dup of one of the fd and set to merged fd.
@@ -81,7 +80,7 @@ DisplayError HWCBufferSyncHandler::SyncMerge(int fd1, int fd2, int *merged_fd) {
     *merged_fd = sync_merge("SyncMerge", fd1, fd2);
   }
 
-  return kErrorNone;
+  return 0;
 }
 
 void HWCBufferSyncHandler::GetSyncInfo(int fd, std::ostringstream *os) {
@@ -106,18 +105,6 @@ void HWCBufferSyncHandler::GetSyncInfo(int fd, std::ostringstream *os) {
     *os << ", obj_name: " << fence_info[i].obj_name;
     *os << ", ts: " << fence_info[i].timestamp_ns;
   }
-}
-
-DisplayError HWCBufferSyncHandler::SyncWait(int fd) {
-  // Deprecated.
-  assert(false);
-  return kErrorUndefined;
-}
-
-bool HWCBufferSyncHandler::IsSyncSignaled(int fd) {
-  // Deprecated.
-  assert(false);
-  return false;
 }
 
 }  // namespace sdm

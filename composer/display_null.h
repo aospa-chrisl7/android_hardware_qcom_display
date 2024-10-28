@@ -1,67 +1,31 @@
 /*
-* Copyright (c) 2017-2019, 2021, The Linux Foundation. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted provided that the following conditions are
-* met:
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*     * Neither the name of The Linux Foundation nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
-* ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
-* BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-* CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-* SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
-* BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-* WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
-* OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
-
-/*
-* Changes from Qualcomm Innovation Center are provided under the following license:
-*
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*    * Redistributions of source code must retain the above copyright
-*      notice, this list of conditions and the following disclaimer.
-*
-*    * Redistributions in binary form must reproduce the above
-*      copyright notice, this list of conditions and the following
-*      disclaimer in the documentation and/or other materials provided
-*      with the distribution.
-*
-*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*      contributors may be used to endorse or promote products derived
-*      from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *     * Neither the name of The Linux Foundation nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
+ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+ * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+ * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #ifndef __DISPLAY_NULL_H__
 #define __DISPLAY_NULL_H__
@@ -87,6 +51,7 @@ class DisplayNull : public DisplayInterface {
   virtual DisplayError GetFrameBufferConfig(DisplayConfigVariableInfo *variable_info);
   virtual DisplayError GetConfig(uint32_t index, DisplayConfigVariableInfo *disp_attr);
   virtual DisplayError GetConfig(DisplayConfigFixedInfo *fixed_info);
+  virtual DisplayError GetRealConfig(uint32_t index, DisplayConfigVariableInfo *disp_attr);
   virtual DisplayError GetRefreshRateRange(uint32_t *min_refresh_rate, uint32_t *max_refresh_rate);
   virtual DisplayError GetActiveConfig(uint32_t *config);
   virtual DisplayError GetNumVariableInfoConfigs(uint32_t *count);
@@ -102,7 +67,6 @@ class DisplayNull : public DisplayInterface {
   virtual bool CanSkipValidate() { return true; }
   virtual bool GameEnhanceSupported() { return false; }
 
-  MAKE_NO_OP(TeardownConcurrentWriteback(void))
   MAKE_NO_OP(Commit(LayerStack *))
   MAKE_NO_OP(GetDisplayState(DisplayState *))
   MAKE_NO_OP(SetDisplayState(DisplayState, bool, shared_ptr<Fence> *))
@@ -143,7 +107,7 @@ class DisplayNull : public DisplayInterface {
   MAKE_NO_OP(SetCompositionState(LayerComposition, bool))
   MAKE_NO_OP(GetClientTargetSupport(uint32_t, uint32_t, LayerBufferFormat,
                                     const ColorMetaData &))
-  MAKE_NO_OP(HandleSecureEvent(SecureEvent, LayerStack *))
+  MAKE_NO_OP(HandleSecureEvent(SecureEvent, bool *))
   MAKE_NO_OP(SetQSyncMode(QSyncMode))
   MAKE_NO_OP(ControlIdlePowerCollapse(bool, bool))
   MAKE_NO_OP(SetDisplayDppsAdROI(void *))
@@ -157,14 +121,13 @@ class DisplayNull : public DisplayInterface {
   MAKE_NO_OP(colorSamplingOn());
   MAKE_NO_OP(colorSamplingOff());
   MAKE_NO_OP(SetDisplayElapseTime(uint64_t))
+  MAKE_NO_OP(GetStcColorModes(snapdragoncolor::ColorModeList *))
+  MAKE_NO_OP(SetStcColorMode(const snapdragoncolor::ColorMode &))
   MAKE_NO_OP(ClearLUTs())
-  MAKE_NO_OP(DelayFirstCommit())
-
-  void SetActive(bool active) { active_ = active; }
-  bool IsActive() { return active_; }
-
- private:
-  bool active_ = false;
+  MAKE_NO_OP(IsSupportedOnDisplay(SupportedDisplayFeature feature, uint32_t *supported))
+  MAKE_NO_OP(GetCwbBufferResolution(CwbTapPoint, uint32_t *, uint32_t *))
+  MAKE_NO_OP(NotifyDisplayCalibrationMode(bool))
+  MAKE_NO_OP(TeardownConcurrentWriteback(void))
 
  protected:
   DisplayConfigVariableInfo default_variable_config_ = {};
@@ -193,7 +156,11 @@ class DisplayNullExternal : public DisplayNull {
   virtual DisplayError GetFrameBufferConfig(DisplayConfigVariableInfo *variable_info);
   virtual DisplayError GetDisplayIdentificationData(uint8_t *out_port, uint32_t *out_data_size,
                                                     uint8_t *out_data);
+  void SetActive(bool active) { active_ = active; }
+  bool IsActive() { return active_; }
+
  private:
+  bool active_ = false;
   DisplayState state_ = kStateOff;
   DisplayConfigVariableInfo fb_config_ = {};
 };

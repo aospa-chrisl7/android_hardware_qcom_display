@@ -37,6 +37,7 @@
 #include <memory>
 #include <memory>
 #include <drm/msm_drm.h>
+#include <display/drm/sde_drm.h>
 #include <mutex>
 #include <set>
 #include "drm_pp_manager.h"
@@ -78,6 +79,9 @@ class DRMConnector {
   bool skip_connector_reload_ = false; //  Usually set to true for new TV/pluggable displays.
   DRMStatus status_ = DRMStatus::FREE;
   std::unique_ptr<DRMPPManager> pp_mgr_{};
+#ifdef SDE_MAX_ROI_V1
+  sde_drm_roi_v1 roi_v1_ {};
+#endif
 };
 
 class DRMConnectorManager {

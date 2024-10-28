@@ -111,6 +111,7 @@ class HWCLayer {
   HWC2::Error SetLayerColorTransform(const float *matrix);
   void SetComposition(const LayerComposition &sdm_composition);
   HWC2::Composition GetClientRequestedCompositionType() { return client_requested_; }
+  HWC2::Composition GetOrigClientRequestedCompositionType() { return client_requested_orig_; }
   void UpdateClientCompositionType(HWC2::Composition type) { client_requested_ = type; }
   HWC2::Composition GetDeviceSelectedCompositionType() { return device_selected_; }
   int32_t GetLayerDataspace() { return dataspace_; }
@@ -135,7 +136,7 @@ class HWCLayer {
   void SetLayerAsMask();
   bool BufferLatched() { return buffer_flipped_; }
   void ResetBufferFlip() { buffer_flipped_ = false; }
-#ifdef FOD_ZPOS
+#ifdef UDFPS_ZPOS
   bool IsFodPressed() { return fod_pressed_; }
 #endif
 
@@ -161,11 +162,13 @@ class HWCLayer {
   bool color_transform_matrix_set_ = false;
   bool buffer_flipped_ = false;
   bool secure_ = false;
-#ifdef FOD_ZPOS
+#ifdef UDFPS_ZPOS
   bool fod_pressed_ = false;
 #endif
 
-  // Composition requested by client(SF)
+  // Composition requested by client(SF) Original
+  HWC2::Composition client_requested_orig_ = HWC2::Composition::Device;
+  // Composition requested by client(SF) Modified for internel use
   HWC2::Composition client_requested_ = HWC2::Composition::Device;
   // Composition selected by SDM
   HWC2::Composition device_selected_ = HWC2::Composition::Device;

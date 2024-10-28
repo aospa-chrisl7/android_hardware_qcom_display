@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -103,14 +103,6 @@ HWC2::Error HWCDisplayDummy::SetVsyncEnabled(HWC2::Vsync enabled) {
 bool HWCDisplayDummy::VsyncEnablePending() {
   return vsync_enable_;
 }
-HWC2::Error HWCDisplayDummy::GetDisplayVsyncPeriod(VsyncPeriodNanos *vsync_period) {
-  *vsync_period = vsync_period_;
-  return HWC2::Error::None;
-}
-HWC2::Error HWCDisplayDummy::SetDisplayVsyncPeriod(VsyncPeriodNanos vsync_period) {
-  vsync_period_ = vsync_period;
-  return HWC2::Error::None;
-}
 
 HWC2::Error HWCDisplayDummy::SetClientTarget(buffer_handle_t target,
                                              shared_ptr<Fence> acquire_fence,
@@ -120,6 +112,22 @@ HWC2::Error HWCDisplayDummy::SetClientTarget(buffer_handle_t target,
   client_dataspace_     = dataspace;
   client_damage_region_ = damage;
   return HWC2::Error::None;
+}
+
+void HWCDisplayDummy::SetConfigInfo(
+                      std::map<uint32_t, DisplayConfigVariableInfo>& variable_config_map,
+                      int active_config_index, uint32_t num_configs) {
+  variable_config_map_ = variable_config_map;
+  active_config_index_ = active_config_index;
+  num_configs_ = num_configs;
+}
+
+HWC2::Error HWCDisplayDummy::SetActiveConfigWithConstraints(
+    hwc2_config_t config, const VsyncPeriodChangeConstraints *vsync_period_change_constraints,
+    VsyncPeriodChangeTimeline *out_timeline) {
+
+  ALOGI("Config change not allowed in async power mode transition");
+  return HWC2::Error::Unsupported;
 }
 
 }  // namespace sdm

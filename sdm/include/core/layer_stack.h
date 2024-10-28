@@ -44,8 +44,8 @@
 #include "layer_buffer.h"
 #include "sdm_types.h"
 
-#ifdef FOD_ZPOS
-#include <drm/sde_drm.h>
+#ifdef UDFPS_ZPOS
+#include <display/drm/sde_drm.h>
 #endif
 
 namespace sdm {
@@ -184,7 +184,11 @@ struct LayerFlags {
       uint32_t sde_preferred : 1;  //! This flag shall be set by client to indicate that this layer
                                    //! will be composed by display device, layer with this flag
                                    //! will have highest priority. To be used by OEMs only.
-#ifdef FOD_ZPOS
+
+#ifdef UDFPS_ZPOS
+      uint32_t reserved : 23;      //!< This flag reserves the remaining 4 * 8 - (8 + 1) bits to
+                                   //!< avoid future ABI breakage
+
       uint32_t fod_pressed : 1;    //!< This flag shall be set internally to mark the fod pressed
                                    //!< layer
 #endif
@@ -281,8 +285,9 @@ struct LayerStackFlags {
                                       //!< stack contains s3d layer, and the layer stack can enter
                                       //!< s3d mode.
 
-      uint32_t post_processed_output : 1;  // If output_buffer should contain post processed output
-                                           // This applies only to primary displays currently
+      uint32_t post_processed_output : 1;  //!< If output_buffer should contain post processed
+                                           //!< output. This flag is set to 1 for DSPP tap point
+                                           //!< and 0 for LM tap point.
 
       uint32_t hdr_present : 1;  //!< Set if stack has HDR content
 
@@ -292,9 +297,7 @@ struct LayerStackFlags {
 
       uint32_t config_changed : 1;  //!< This flag indicates Display config must be validated.
 
-      uint32_t scaling_rgb_layer_present : 1; //!< This flag indicates scaling rgb layer presense
-
-      uint32_t fod_pressed_present : 1;
+      uint32_t scaling_rgb_layer_present : 1;  //!< This flag indicates scaling rgb layer presence
     };
 
     uint32_t flags = 0;               //!< For initialization purpose only.
@@ -448,6 +451,23 @@ struct PrimariesTransfer {
   }
 };
 
+/*! @brief This enum represents the Tappoints for CWB that are supported by the hardware. */
+enum CwbTapPoint {
+  kLmTapPoint,      // This is set by client to use Layer Mixer output for CWB.
+  kDsppTapPoint,    // This is set by client to use DSPP output for CWB.
+};
+
+/*! @brief This structure defines the configuration variables needed to perform CWB.
+
+  @sa LayerStack
+*/
+struct CwbConfig {
+  bool pu_as_cwb_roi = false;                        //!< Whether to include the PU ROI generated
+                                                     //!< from app layers in CWB ROI.
+  LayerRect cwb_roi = {};                            //!< Client specified ROI rect for CWB.
+  LayerRect cwb_full_rect = {};                      //!< Same as Output buffer Rect (unaligned).
+  CwbTapPoint tap_point = CwbTapPoint::kLmTapPoint;  //!< Client specified tap point for CWB.
+};
 
 /*! @brief This structure defines a layer stack that contains layers which need to be composed and
   rendered onto the target.
@@ -479,6 +499,11 @@ struct LayerStack {
 
   uint64_t elapse_timestamp = 0;       //!< system time until which display commit needs to be held
 
+  bool block_on_fb = true;             //!< Indicates if there is a need to block
+                                       //!< on GPU composed o/p.
+
+  CwbConfig *cwb_config = NULL;        //!< Struct that contains the original CWB configuration
+                                       //!< provided by CWB client.
 };
 
 }  // namespace sdm

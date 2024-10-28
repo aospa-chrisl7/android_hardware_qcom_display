@@ -28,44 +28,42 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 /*
-* Changes from Qualcomm Innovation Center are provided under the following license:
-*
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*    * Redistributions of source code must retain the above copyright
-*      notice, this list of conditions and the following disclaimer.
-*
-*    * Redistributions in binary form must reproduce the above
-*      copyright notice, this list of conditions and the following
-*      disclaimer in the documentation and/or other materials provided
-*      with the distribution.
-*
-*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*      contributors may be used to endorse or promote products derived
-*      from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+Changes from Qualcomm Innovation Center are provided under the following license:
+Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the
+disclaimer below) provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+    * Neither the name of Qualcomm Innovation Center, Inc. nor the
+      names of its contributors may be used to endorse or promote
+      products derived from this software without specific prior
+      written permission.
+
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
+
 
 #include <fcntl.h>
 #include <utils/debug.h>
 #include <utils/sys.h>
+#include <utils/rect.h>
 #include <vector>
 #include <string>
 #include <cstring>
@@ -106,6 +104,21 @@ DisplayError HWPeripheralDRM::Init() {
 
   PopulateBitClkRates();
   CreatePanelFeaturePropertyMap();
+
+  sde_drm::DRMConnectorsInfo conns_info = {};
+  int drm_err = drm_mgr_intf_->GetConnectorsInfo(&conns_info);
+  if (drm_err) {
+    DLOGE("DRM Driver error %d while getting Connectors info.", drm_err);
+    return kErrorUndefined;
+  }
+  for (auto &iter : conns_info) {
+    if (iter.second.type == DRM_MODE_CONNECTOR_VIRTUAL) {
+      has_cwb_crop_ = static_cast<bool>(iter.second.modes[current_mode_index_].has_cwb_crop);
+      has_dedicated_cwb_ =
+          static_cast<bool>(iter.second.modes[current_mode_index_].has_dedicated_cwb);
+      break;
+    }
+  }
 
   return kErrorNone;
 }
@@ -221,6 +234,8 @@ DisplayError HWPeripheralDRM::Validate(HWLayers *hw_layers) {
   SetDestScalarData(hw_layer_info);
   SetupConcurrentWriteback(hw_layer_info, true, nullptr);
   SetIdlePCState();
+  SetSelfRefreshState();
+  SetVMReqState();
 
   return HWDeviceDRM::Validate(hw_layers);
 }
@@ -233,6 +248,8 @@ DisplayError HWPeripheralDRM::Commit(HWLayers *hw_layers) {
   bool has_fence = SetupConcurrentWriteback(hw_layer_info, false, &cwb_fence_fd);
 
   SetIdlePCState();
+  SetSelfRefreshState();
+  SetVMReqState();
 
   DisplayError error = HWDeviceDRM::Commit(hw_layers);
   if (error != kErrorNone) {
@@ -261,6 +278,15 @@ DisplayError HWPeripheralDRM::Commit(HWLayers *hw_layers) {
   }
 
   idle_pc_state_ = sde_drm::DRMIdlePCState::NONE;
+
+  // After commit, update the Self Refresh state
+  if (self_refresh_state_ != kSelfRefreshNone) {
+    if (self_refresh_state_ == kSelfRefreshEnable) {
+      self_refresh_state_ = kSelfRefreshDisable;
+    } else {
+      self_refresh_state_ = kSelfRefreshNone;
+    }
+  }
 
   return error;
 }
@@ -330,6 +356,18 @@ void HWPeripheralDRM::CacheDestScalarData() {
   }
 }
 
+void HWPeripheralDRM::SetSelfRefreshState() {
+  if (self_refresh_state_ != kSelfRefreshNone) {
+    if (self_refresh_state_ == kSelfRefreshEnable) {
+      drm_atomic_intf_->Perform(sde_drm::DRMOps::CRTC_SET_CACHE_STATE, token_.crtc_id,
+                                sde_drm::DRMCacheState::ENABLED);
+    } else {
+      drm_atomic_intf_->Perform(sde_drm::DRMOps::CRTC_SET_CACHE_STATE, token_.crtc_id,
+                                sde_drm::DRMCacheState::DISABLED);
+    }
+  }
+}
+
 DisplayError HWPeripheralDRM::Flush(HWLayers *hw_layers) {
   DisplayError err = HWDeviceDRM::Flush(hw_layers);
   if (err != kErrorNone) {
@@ -374,6 +412,9 @@ DisplayError HWPeripheralDRM::SetDppsFeature(void *payload, size_t size) {
     }
   }
 
+  if (feature_id == sde_drm::kFeatureLtmHistCtrl)
+    ltm_hist_en_ = value;
+
   if (object_type == DRM_MODE_OBJECT_CRTC) {
     obj_id = token_.crtc_id;
   } else if (object_type == DRM_MODE_OBJECT_CONNECTOR) {
@@ -398,12 +439,50 @@ DisplayError HWPeripheralDRM::GetDppsFeatureInfo(void *payload, size_t size) {
   return kErrorNone;
 }
 
-DisplayError HWPeripheralDRM::HandleSecureEvent(SecureEvent secure_event, HWLayers *hw_layers) {
+DisplayError HWPeripheralDRM::HandleSecureEvent(SecureEvent secure_event,
+                                                const HWQosData &qos_data) {
   switch (secure_event) {
+    case kTUITransitionPrepare:
+    case kTUITransitionUnPrepare:
+      tui_state_ = kTUIStateInProgress;
+      break;
+    case kTUITransitionStart: {
+      tui_state_ = kTUIStateStart;
+      ControlIdlePowerCollapse(false /* enable */, false /* synchronous */);
+      if (hw_panel_info_.mode != kModeCommand) {
+        SetQOSData(qos_data);
+        SetVMReqState();
+        SetIdlePCState();
+        DisplayError err = Flush(NULL);
+        if (err != kErrorNone) {
+          return err;
+        }
+        SetTUIState();
+      }
+    }
+    break;
+
+    case kTUITransitionEnd: {
+      tui_state_ = kTUIStateEnd;
+      ResetPropertyCache();
+      ControlIdlePowerCollapse(true /* enable */, false /* synchronous */);
+      if (hw_panel_info_.mode != kModeCommand || pending_power_state_ == kPowerStateOff) {
+        SetQOSData(qos_data);
+        SetVMReqState();
+        SetIdlePCState();
+        DisplayError err = Flush(NULL);
+        if (err != kErrorNone) {
+          return err;
+        }
+        SetTUIState();
+      }
+    }
+    break;
+
     case kSecureDisplayStart: {
       secure_display_active_ = true;
       if (hw_panel_info_.mode != kModeCommand) {
-        DisplayError err = Flush(hw_layers);
+        DisplayError err = Flush(NULL);
         if (err != kErrorNone) {
           return err;
         }
@@ -413,11 +492,14 @@ DisplayError HWPeripheralDRM::HandleSecureEvent(SecureEvent secure_event, HWLaye
 
     case kSecureDisplayEnd: {
       if (hw_panel_info_.mode != kModeCommand) {
-        DisplayError err = Flush(hw_layers);
+        DisplayError err = Flush(NULL);
         if (err != kErrorNone) {
           return err;
         }
+      } else {
+        secure_inactive_pending_commit_ = true;
       }
+
       secure_display_active_ = false;
       synchronous_commit_ = true;
     }
@@ -435,6 +517,11 @@ bool HWPeripheralDRM::SetupConcurrentWriteback(const HWLayersInfo &hw_layer_info
                                                int64_t *release_fence_fd) {
   bool enable = hw_resource_.has_concurrent_writeback && hw_layer_info.stack->output_buffer;
   if (!(enable || cwb_config_.enabled)) {
+    if (cwb_cached_conn_id_ > 0 && !validate) {
+      DLOGI("Actual Tear down CWB");
+      drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_CRTC, cwb_cached_conn_id_, 0);
+      cwb_cached_conn_id_ = 0;
+    }
     return false;
   }
 
@@ -446,7 +533,7 @@ bool HWPeripheralDRM::SetupConcurrentWriteback(const HWLayersInfo &hw_layer_info
   if (cwb_config_.enabled) {
     if (enable) {
       // Set DRM properties for Concurrent Writeback.
-      ConfigureConcurrentWriteback(hw_layer_info.stack);
+      ConfigureConcurrentWriteback(hw_layer_info);
 
       if (!validate && release_fence_fd) {
         // Set GET_RETIRE_FENCE property to get Concurrent Writeback fence.
@@ -457,6 +544,7 @@ bool HWPeripheralDRM::SetupConcurrentWriteback(const HWLayersInfo &hw_layer_info
     } else {
       // Tear down the Concurrent Writeback topology.
       drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_CRTC, cwb_config_.token.conn_id, 0);
+      DLOGI("Tear down the Concurrent Writeback topology");
     }
   }
 
@@ -465,6 +553,9 @@ bool HWPeripheralDRM::SetupConcurrentWriteback(const HWLayersInfo &hw_layer_info
 
 DisplayError HWPeripheralDRM::TeardownConcurrentWriteback(void) {
   if (cwb_config_.enabled) {
+    // Tear down the Concurrent Writeback topology.
+    DLOGI("Cache CWB conn id to Tear down the Concurrent Writeback topology");
+    cwb_cached_conn_id_ = cwb_config_.token.conn_id;
     drm_mgr_intf_->UnregisterDisplay(&(cwb_config_.token));
     cwb_config_.enabled = false;
     registry_.Clear();
@@ -507,41 +598,95 @@ DisplayError HWPeripheralDRM::SetupConcurrentWritebackModes() {
   return kErrorNone;
 }
 
-void HWPeripheralDRM::ConfigureConcurrentWriteback(LayerStack *layer_stack) {
-  LayerBuffer *output_buffer = layer_stack->output_buffer;
+void HWPeripheralDRM::ConfigureConcurrentWriteback(const HWLayersInfo &hw_layer_info) {
+  CwbConfig *cwb_config = hw_layer_info.hw_cwb_config;
+  LayerBuffer *output_buffer = hw_layer_info.stack->output_buffer;
   registry_.MapOutputBufferToFbId(output_buffer);
+  uint32_t &vitual_conn_id = cwb_config_.token.conn_id;
 
   // Set the topology for Concurrent Writeback: [CRTC_PRIMARY_DISPLAY - CONNECTOR_VIRTUAL_DISPLAY].
-  drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_CRTC, cwb_config_.token.conn_id, token_.crtc_id);
+  drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_CRTC, vitual_conn_id, token_.crtc_id);
 
   // Set CRTC Capture Mode
-  DRMCWbCaptureMode capture_mode = layer_stack->flags.post_processed_output ?
-                                   DRMCWbCaptureMode::DSPP_OUT : DRMCWbCaptureMode::MIXER_OUT;
+  DRMCWbCaptureMode capture_mode = DRMCWbCaptureMode::MIXER_OUT;
+  if (cwb_config->tap_point == CwbTapPoint::kDsppTapPoint) {
+    capture_mode = DRMCWbCaptureMode::DSPP_OUT;
+  }
+
   drm_atomic_intf_->Perform(DRMOps::CRTC_SET_CAPTURE_MODE, token_.crtc_id, capture_mode);
 
   // Set Connector Output FB
   uint32_t fb_id = registry_.GetOutputFbId(output_buffer->handle_id);
-  drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_OUTPUT_FB_ID, cwb_config_.token.conn_id, fb_id);
+  drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_OUTPUT_FB_ID, vitual_conn_id, fb_id);
 
   // Set Connector Secure Mode
   bool secure = output_buffer->flags.secure;
   DRMSecureMode mode = secure ? DRMSecureMode::SECURE : DRMSecureMode::NON_SECURE;
-  drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_FB_SECURE_MODE, cwb_config_.token.conn_id, mode);
+  drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_FB_SECURE_MODE, vitual_conn_id, mode);
 
   // Set Connector Output Rect
-  sde_drm::DRMRect dst = {};
-  dst.left = 0;
-  dst.top = 0;
-  dst.right = display_attributes_[current_mode_index_].x_pixels;
-  dst.bottom = display_attributes_[current_mode_index_].y_pixels;
-  drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_OUTPUT_RECT, cwb_config_.token.conn_id, dst);
+  sde_drm::DRMRect full_frame = {};
+  full_frame.left = 0;
+  full_frame.top = 0;
+
+  if (capture_mode == DRMCWbCaptureMode::MIXER_OUT) {
+    full_frame.right = mixer_attributes_.width;
+    full_frame.bottom = mixer_attributes_.height;
+  } else {
+    full_frame.right = display_attributes_[current_mode_index_].x_pixels;
+    full_frame.bottom = display_attributes_[current_mode_index_].y_pixels;
+  }
+
+  if (!has_cwb_crop_) {  // Check whether CWB ROI feature is supported. In-case if it's
+    // not supported, then set WB connector's DST_* properties as per full frame rect.
+    drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_OUTPUT_RECT, vitual_conn_id, full_frame);
+  } else {  // CWB ROI is supported
+    bool is_full_frame_update = IsFullFrameUpdate(hw_layer_info);
+    // Set WB connector's roi_v1 property to PU_ROI.
+    if (is_full_frame_update) {
+      drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_ROI, vitual_conn_id, 0, nullptr);
+      DLOGV_IF(kTagDriverConfig, "roi_v1 of virtual connector is set NULL (Full Frame update).");
+    } else {
+      const int kNumMaxROIs = 4;
+      sde_drm::DRMRect conn_rects[kNumMaxROIs] = {full_frame};
+      for (uint32_t i = 0; i < hw_layer_info.left_frame_roi.size(); i++) {
+        auto &roi = hw_layer_info.left_frame_roi.at(i);
+        conn_rects[i].left = UINT32(roi.left);
+        conn_rects[i].right = UINT32(roi.right);
+        conn_rects[i].top = UINT32(roi.top);
+        conn_rects[i].bottom = UINT32(roi.bottom);
+      }
+      uint32_t num_rects = std::max(1u, UINT32(hw_layer_info.left_frame_roi.size()));
+      drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_ROI, vitual_conn_id, num_rects, conn_rects);
+    }
+
+    // Set WB connector's DST_* property to CWB_ROI.
+    LayerRect cwb_roi = cwb_config->cwb_roi;
+    if (is_full_frame_update && cwb_config->pu_as_cwb_roi) {  // Incase of full frame update
+      // and when cwb client has set pu_as_cwb_roi as true, set Full frame CWB ROI.
+      drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_OUTPUT_RECT, vitual_conn_id, full_frame);
+    } else {
+      sde_drm::DRMRect dst = {};
+      dst.left = UINT32(cwb_roi.left);
+      dst.right = UINT32(cwb_roi.right);
+      dst.top = UINT32(cwb_roi.top);
+      dst.bottom = UINT32(cwb_roi.bottom);
+      drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_OUTPUT_RECT, vitual_conn_id, dst);
+    }
+  }
+
+  const LayerRect &roi = cwb_config->cwb_roi;
+  DLOGV_IF(kTagDriverConfig, "CWB Mode:%d roi.left:%f roi.top:%f roi.right:%f roi.bottom:%f",
+           capture_mode, roi.left, roi.top, roi.right, roi.bottom);
 }
 
 void HWPeripheralDRM::PostCommitConcurrentWriteback(LayerBuffer *output_buffer) {
   bool enabled = hw_resource_.has_concurrent_writeback && output_buffer;
 
   if (!enabled) {
-    TeardownConcurrentWriteback();
+    drm_mgr_intf_->UnregisterDisplay(&(cwb_config_.token));
+    cwb_config_.enabled = false;
+    registry_.Clear();
   }
 }
 
@@ -565,7 +710,9 @@ DisplayError HWPeripheralDRM::PowerOn(const HWQosData &qos_data,
     return kErrorUndefined;
   }
 
-  if (first_cycle_ || delay_first_commit_) {
+  if (first_cycle_ || tui_state_ != kTUIStateNone) {
+    DLOGI("Request deferred TUI state %d", tui_state_);
+    pending_power_state_ = kPowerStateOn;
     return kErrorDeferred;
   }
 
@@ -602,24 +749,37 @@ DisplayError HWPeripheralDRM::PowerOn(const HWQosData &qos_data,
 
 DisplayError HWPeripheralDRM::PowerOff(bool teardown) {
   DTRACE_SCOPED();
-
-  if (delay_first_commit_) {
-    delay_first_commit_ = false;
+  SetVMReqState();
+  DisplayError err = kErrorNone;
+  if (secure_display_active_ || secure_inactive_pending_commit_) {
+    DLOGI("Either secure active or no normal commit followed secure end ! Need flush");
+    err = Flush(NULL);
+    if (err != kErrorNone) {
+      return err;
+    }
   }
 
-  DisplayError err = HWDeviceDRM::PowerOff(teardown);
+  // Tear down the Concurrent Writeback topology, while powering off.
+  if (cwb_config_.enabled) {
+    drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_CRTC, cwb_config_.token.conn_id, 0);
+    DLOGI("Tear down the Concurrent Writeback topology");
+  }
+
+  err = HWDeviceDRM::PowerOff(teardown);
   if (err != kErrorNone) {
     return err;
   }
 
   pending_poms_switch_ = false;
   active_ = false;
+  SetTUIState();
 
   return kErrorNone;
 }
 
 DisplayError HWPeripheralDRM::Doze(const HWQosData &qos_data, shared_ptr<Fence> *release_fence) {
   DTRACE_SCOPED();
+  SetVMReqState();
 
   if (!first_cycle_ && switch_mode_valid_ && !doze_poms_switch_done_ &&
     (current_mode_index_ == video_mode_index_)) {
@@ -631,22 +791,20 @@ DisplayError HWPeripheralDRM::Doze(const HWQosData &qos_data, shared_ptr<Fence> 
       pending_poms_switch_ = true;
     }
   }
-
   DisplayError err = HWDeviceDRM::Doze(qos_data, release_fence);
   if (err != kErrorNone) {
     return err;
   }
-
   if (first_cycle_) {
     active_ = true;
   }
-
+  SetTUIState();
   return kErrorNone;
 }
 
 DisplayError HWPeripheralDRM::DozeSuspend(const HWQosData &qos_data,
                                           shared_ptr<Fence> *release_fence) {
-  DTRACE_SCOPED();
+  SetVMReqState();
 
   if (switch_mode_valid_ && !doze_poms_switch_done_ &&
     (current_mode_index_ == video_mode_index_)) {
@@ -663,6 +821,7 @@ DisplayError HWPeripheralDRM::DozeSuspend(const HWQosData &qos_data,
   pending_poms_switch_ = false;
   active_ = true;
 
+  SetTUIState();
   return kErrorNone;
 }
 
@@ -727,8 +886,8 @@ DisplayError HWPeripheralDRM::SetFrameTrigger(FrameTriggerMode mode) {
 }
 
 DisplayError HWPeripheralDRM::SetPanelBrightness(int level) {
-  if (pending_doze_) {
-    DLOGI("Doze state pending!! Skip for now");
+  if (pending_power_state_ != kPowerStateNone) {
+    DLOGI("Power state %d pending!! Skip for now", pending_power_state_);
     return kErrorDeferred;
   }
 
@@ -736,6 +895,9 @@ DisplayError HWPeripheralDRM::SetPanelBrightness(int level) {
 
   if (brightness_base_path_.empty()) {
     return kErrorHardware;
+  }
+  if (!active_) {
+    return kErrorNone;
   }
 
   std::string brightness_node(brightness_base_path_ + "brightness");
@@ -833,7 +995,7 @@ DisplayError HWPeripheralDRM::SetBLScale(uint32_t level) {
   return kErrorNone;
 }
 
-DisplayError HWPeripheralDRM::GetPanelBrightnessBasePath(std::string *base_path) {
+DisplayError HWPeripheralDRM::GetPanelBrightnessBasePath(std::string *base_path) const {
   if (!base_path) {
     DLOGE("Invalid base_path is null pointer");
     return kErrorParameters;
@@ -848,12 +1010,29 @@ DisplayError HWPeripheralDRM::GetPanelBrightnessBasePath(std::string *base_path)
   return kErrorNone;
 }
 
+DisplayError HWPeripheralDRM::EnableSelfRefresh() {
+  self_refresh_state_ = kSelfRefreshEnable;
+  return kErrorNone;
+}
+
+void HWPeripheralDRM::ResetPropertyCache() {
+  drm_atomic_intf_->Perform(sde_drm::DRMOps::PLANES_RESET_CACHE, token_.crtc_id);
+  drm_atomic_intf_->Perform(sde_drm::DRMOps::CRTC_RESET_CACHE, token_.crtc_id);
+}
+
 void HWPeripheralDRM::CreatePanelFeaturePropertyMap() {
   panel_feature_property_map_.clear();
-
+  panel_feature_property_map_[kPanelFeatureSPRInitCfg] = sde_drm::kDRMPanelFeatureSPRInit;
+  panel_feature_property_map_[kPanelFeatureSPRPackType] = sde_drm::kDRMPanelFeatureSPRPackType;
+  panel_feature_property_map_[kPanelFeatureDemuraInitCfg] = sde_drm::kDRMPanelFeatureDemuraInit;
+  panel_feature_property_map_[kPanelFeatureDsppIndex] = sde_drm::kDRMPanelFeatureDsppIndex;
+  panel_feature_property_map_[kPanelFeatureDsppSPRInfo] = sde_drm::kDRMPanelFeatureDsppSPRInfo;
   panel_feature_property_map_[kPanelFeatureDsppRCInfo] = sde_drm::kDRMPanelFeatureDsppRCInfo;
+  panel_feature_property_map_[kPanelFeatureDsppDemuraInfo] =
+    sde_drm::kDRMPanelFeatureDsppDemuraInfo;
   panel_feature_property_map_[kPanelFeatureRCInitCfg] = sde_drm::kDRMPanelFeatureRCInit;
 }
+
 int HWPeripheralDRM::GetPanelFeature(PanelFeaturePropertyInfo *feature_info) {
   int ret = 0;
   DRMPanelFeatureInfo drm_feature = {};
@@ -928,8 +1107,52 @@ int HWPeripheralDRM::SetPanelFeature(const PanelFeaturePropertyInfo &feature_inf
 
   return ret;
 }
-DisplayError HWPeripheralDRM::DelayFirstCommit() {
-  delay_first_commit_ = true;
-  return kErrorNone;
+
+DisplayError HWPeripheralDRM::GetFeatureSupportStatus(const HWFeature feature, uint32_t *status) {
+  DisplayError error = kErrorNone;
+
+  if (!status) {
+    return kErrorParameters;
+  }
+
+  switch (feature) {
+    case kAllowedModeSwitch:
+      *status = connector_info_.modes[current_mode_index_].allowed_mode_switch;
+      break;
+    case kHasCwbCrop:
+      *status = UINT32(has_cwb_crop_);
+      break;
+    case kHasDedicatedCwb:
+      *status = UINT32(has_dedicated_cwb_);
+      break;
+    default:
+      DLOGW("Unable to get status of feature : %d", feature);
+      error = kErrorParameters;
+      break;
+  }
+
+  return error;
 }
+
+void HWPeripheralDRM::SetVMReqState() {
+  if (tui_state_ == kTUIStateStart) {
+    drm_atomic_intf_->Perform(sde_drm::DRMOps::CRTC_SET_VM_REQ_STATE, token_.crtc_id,
+                              sde_drm::DRMVMRequestState::RELEASE);
+    DLOGI("Release resources to SVM");
+    if (ltm_hist_en_)
+      drm_atomic_intf_->Perform(sde_drm::DRMOps::DPPS_CACHE_FEATURE, token_.crtc_id,
+                                sde_drm::kFeatureLtmHistCtrl, 0);
+  } else if (tui_state_ == kTUIStateEnd) {
+    drm_atomic_intf_->Perform(sde_drm::DRMOps::CRTC_SET_VM_REQ_STATE, token_.crtc_id,
+                              sde_drm::DRMVMRequestState::ACQUIRE);
+    DLOGI("Acquire resources from SVM");
+    if (ltm_hist_en_)
+      drm_atomic_intf_->Perform(sde_drm::DRMOps::DPPS_CACHE_FEATURE, token_.crtc_id,
+                                sde_drm::kFeatureLtmHistCtrl, 1);
+  } else if (tui_state_ == kTUIStateNone) {
+    drm_atomic_intf_->Perform(sde_drm::DRMOps::CRTC_SET_VM_REQ_STATE, token_.crtc_id,
+                              sde_drm::DRMVMRequestState::NONE);
+  }
+}
+
 }  // namespace sdm

@@ -27,42 +27,6 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted (subject to the limitations in the
- * disclaimer below) provided that the following conditions are met:
- *
- *    * Redistributions of source code must retain the above copyright
- *      notice, this list of conditions and the following disclaimer.
- *
- *    * Redistributions in binary form must reproduce the above
- *      copyright notice, this list of conditions and the following
- *      disclaimer in the documentation and/or other materials provided
- *      with the distribution.
- *
- *    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *      contributors may be used to endorse or promote products derived
- *      from this software without specific prior written permission.
- *
- * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-
 #ifndef __HWC_DISPLAY_BUILTIN_H__
 #define __HWC_DISPLAY_BUILTIN_H__
 
@@ -75,7 +39,6 @@
 #include "cpuhint.h"
 #include "hwc_display.h"
 #include "hwc_layers.h"
-#include "display_null.h"
 
 #include "gl_layer_stitch.h"
 
@@ -128,19 +91,20 @@ class HWCDisplayBuiltIn : public HWCDisplay, public SyncTask<LayerStitchTaskCode
   virtual HWC2::Error SetColorTransform(const float *matrix, android_color_transform_t hint);
   virtual HWC2::Error RestoreColorTransform();
   virtual int Perform(uint32_t operation, ...);
+  virtual int GetActiveSecureSession(std::bitset<kSecureMax> *secure_sessions);
   virtual int HandleSecureSession(const std::bitset<kSecureMax> &secure_session,
                                   bool *power_on_pending, bool is_active_secure_display);
   virtual void SetIdleTimeoutMs(uint32_t timeout_ms, uint32_t inactive_ms);
   virtual HWC2::Error SetFrameDumpConfig(uint32_t count, uint32_t bit_mask_layer_type,
-                                         int32_t format, bool post_processed);
-  virtual int FrameCaptureAsync(const BufferInfo &output_buffer_info, bool post_processed);
+                                         int32_t format, const CwbConfig &cwb_config);
+  virtual int FrameCaptureAsync(const BufferInfo &output_buffer_info, const CwbConfig &cwb_config);
   virtual int GetFrameCaptureStatus() { return frame_capture_status_; }
   virtual DisplayError SetDetailEnhancerConfig(const DisplayDetailEnhancerData &de_data);
   virtual DisplayError SetHWDetailedEnhancerConfig(void *params);
   virtual DisplayError ControlPartialUpdate(bool enable, uint32_t *pending);
   virtual HWC2::Error SetReadbackBuffer(const native_handle_t *buffer,
-                                        shared_ptr<Fence> acquire_fence,
-                                        bool post_processed_output, CWBClient client);
+                                        shared_ptr<Fence> acquire_fence, CwbConfig cwb_config,
+                                        CWBClient client);
   virtual HWC2::Error GetReadbackBufferFence(shared_ptr<Fence> *release_fence);
   virtual HWC2::Error SetQSyncMode(QSyncMode qsync_mode);
   virtual DisplayError ControlIdlePowerCollapse(bool enable, bool synchronous);
@@ -149,14 +113,13 @@ class HWCDisplayBuiltIn : public HWCDisplay, public SyncTask<LayerStitchTaskCode
   virtual DisplayError SetDynamicDSIClock(uint64_t bitclk);
   virtual DisplayError GetDynamicDSIClock(uint64_t *bitclk);
   virtual DisplayError GetSupportedDSIClock(std::vector<uint64_t> *bitclk_rates);
-  virtual DisplayError SetStandByMode(bool enable, bool is_twm);
-  virtual DisplayError DelayFirstCommit();
   virtual HWC2::Error UpdateDisplayId(hwc2_display_t id);
   virtual HWC2::Error SetPendingRefresh();
   virtual HWC2::Error SetPanelBrightness(float brightness);
   virtual HWC2::Error GetPanelBrightness(float *brightness);
   virtual HWC2::Error GetPanelMaxBrightness(uint32_t *max_brightness_level);
-  virtual DisplayError TeardownConcurrentWriteback(void);
+  virtual DisplayError TeardownConcurrentWriteback(bool *needs_refresh);
+  virtual DisplayError TeardownCwbForVirtualDisplay();
   virtual void SetFastPathComposition(bool enable) {
     fast_path_composition_ = enable && !readback_buffer_queued_;
   }
@@ -182,8 +145,12 @@ class HWCDisplayBuiltIn : public HWCDisplay, public SyncTask<LayerStitchTaskCode
       int32_t samples_size[NUM_HISTOGRAM_COLOR_COMPONENTS],
       uint64_t *samples[NUM_HISTOGRAM_COLOR_COMPONENTS]);
   void Dump(std::ostringstream *os) override;
-  virtual bool HasReadBackBufferSupport();
+  virtual HWC2::Error SetPowerMode(HWC2::PowerMode mode, bool teardown);
   virtual bool IsDisplayIdle();
+  virtual bool HasReadBackBufferSupport();
+  virtual HWC2::Error NotifyDisplayCalibrationMode(bool in_calibration);
+  virtual HWC2::Error PresentAndOrGetValidateDisplayOutput(uint32_t *out_num_types,
+                                                           uint32_t *out_num_requests);
 
  private:
   HWCDisplayBuiltIn(CoreInterface *core_intf, BufferAllocator *buffer_allocator,
@@ -212,8 +179,12 @@ class HWCDisplayBuiltIn : public HWCDisplay, public SyncTask<LayerStitchTaskCode
   void PostCommitStitchLayers();
   void SetCpuPerfHintLargeCompCycle();
   void SetPartialUpdate(DisplayConfigFixedInfo fixed_info);
-  uint32_t GetUpdatingAppLayersCount();
   void ValidateUiScaling();
+  void ConfigureCwbAtLm(uint32_t *x_pixels, uint32_t *y_pixels);
+  void EnablePartialUpdate();
+  uint32_t GetUpdatingAppLayersCount();
+  int ValidateFrameCaptureConfig(const BufferInfo &output_buffer_info,
+                                 const CwbTapPoint &cwb_tappoint);
 
   // SyncTask methods.
   void OnTask(const LayerStitchTaskCode &task_code,
@@ -226,7 +197,7 @@ class HWCDisplayBuiltIn : public HWCDisplay, public SyncTask<LayerStitchTaskCode
 
   // Builtin readback buffer configuration
   LayerBuffer output_buffer_ = {};
-  bool post_processed_output_ = false;
+  CwbConfig cwb_config_ = {};
   bool readback_buffer_queued_ = false;
   bool readback_configured_ = false;
 
@@ -236,6 +207,7 @@ class HWCDisplayBuiltIn : public HWCDisplay, public SyncTask<LayerStitchTaskCode
   void *output_buffer_base_ = nullptr;
   bool pending_refresh_ = true;
   bool enable_optimize_refresh_ = false;
+  bool enable_poms_during_doze_ = false;
 
   // Members for 1 frame capture in a client provided buffer
   bool frame_capture_buffer_queued_ = false;
@@ -252,21 +224,17 @@ class HWCDisplayBuiltIn : public HWCDisplay, public SyncTask<LayerStitchTaskCode
   bool qsync_reconfigured_ = false;
   // Members for Color sampling feature
   DisplayError HistogramEvent(int fd, uint32_t blob_id) override;
-#ifndef TARGET_HEADLESS
   histogram::HistogramCollector histogram;
-#endif
   std::mutex sampling_mutex;
   bool api_sampling_vote = false;
   bool vndservice_sampling_vote = false;
   int perf_hint_window_ = 0;
   int perf_hint_large_comp_cycle_ = 0;
-  bool disable_dyn_fps_ = false;
-  bool enhance_idle_time_ = false;
   bool force_reset_validate_ = false;
-
-  // NULL display
-  DisplayNull display_null_;
-  DisplayInterface *stored_display_intf_ = NULL;
+  bool disable_dyn_fps_ = false;
+  bool enable_round_corner_ = false;
+  bool enhance_idle_time_ = false;
+  shared_ptr<Fence> retire_fence_ = nullptr;
 };
 
 }  // namespace sdm

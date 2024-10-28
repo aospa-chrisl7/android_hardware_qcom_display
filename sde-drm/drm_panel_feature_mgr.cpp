@@ -1,4 +1,4 @@
-/* Copyright (c) 2021, The Linux Foundataion. All rights reserved.
+/* Copyright (c) 2020, The Linux Foundataion. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -85,22 +85,41 @@ void DRMPanelFeatureMgr::Init(int fd, drmModeRes* res) {
     }
   }
 
+  drm_property_map_[kDRMPanelFeatureSPRInit] = DRMProperty::SPR_INIT_CFG_V1;
+  drm_property_map_[kDRMPanelFeatureSPRPackType] = DRMProperty::CAPABILITIES;
+  drm_property_map_[kDRMPanelFeatureDsppIndex] = DRMProperty::DSPP_CAPABILITIES;
+  drm_property_map_[kDRMPanelFeatureDsppSPRInfo] = DRMProperty::DSPP_CAPABILITIES;
+  drm_property_map_[kDRMPanelFeatureDsppDemuraInfo] = DRMProperty::DSPP_CAPABILITIES;
   drm_property_map_[kDRMPanelFeatureDsppRCInfo] = DRMProperty::DSPP_CAPABILITIES;
   drm_property_map_[kDRMPanelFeatureRCInit] = DRMProperty::DSPP_RC_MASK_V1;
+
+  drm_prop_type_map_[kDRMPanelFeatureSPRInit] = DRMPropType::kPropBlob;
   drm_prop_type_map_[kDRMPanelFeatureRCInit] = DRMPropType::kPropBlob;
+  drm_prop_type_map_[kDRMPanelFeatureSPRPackType] = DRMPropType::kPropBlob;
+  drm_prop_type_map_[kDRMPanelFeatureDsppIndex] = DRMPropType::kPropRange;
+  drm_prop_type_map_[kDRMPanelFeatureDsppSPRInfo] = DRMPropType::kPropRange;
+  drm_prop_type_map_[kDRMPanelFeatureDsppDemuraInfo] = DRMPropType::kPropRange;
   drm_prop_type_map_[kDRMPanelFeatureDsppRCInfo] = DRMPropType::kPropRange;
 
-
+  feature_info_tbl_[kDRMPanelFeatureSPRInit] = DRMPanelFeatureInfo {kDRMPanelFeatureSPRInit,
+      DRM_MODE_OBJECT_CRTC, UINT32_MAX, 1, sizeof(drm_msm_spr_init_cfg), 0};
   feature_info_tbl_[kDRMPanelFeatureRCInit] = DRMPanelFeatureInfo {
-      kDRMPanelFeatureRCInit, DRM_MODE_OBJECT_CRTC, UINT32_MAX, 1, sizeof(msm_rc_mask_cfg), 0};
-
+      kDRMPanelFeatureRCInit, DRM_MODE_OBJECT_CRTC, UINT32_MAX, 1, sizeof(drm_msm_rc_mask_cfg), 0};
+  feature_info_tbl_[kDRMPanelFeatureSPRPackType] = DRMPanelFeatureInfo {kDRMPanelFeatureSPRPackType,
+      DRM_MODE_OBJECT_CONNECTOR, UINT32_MAX, 1, 64, 0};
+  feature_info_tbl_[kDRMPanelFeatureDsppIndex] = DRMPanelFeatureInfo {kDRMPanelFeatureDsppIndex,
+      DRM_MODE_OBJECT_CRTC, UINT32_MAX, 1, 64, 0};
+  feature_info_tbl_[kDRMPanelFeatureDsppSPRInfo] = DRMPanelFeatureInfo {
+    kDRMPanelFeatureDsppSPRInfo, DRM_MODE_OBJECT_CRTC, UINT32_MAX, 1, 64, 0};
+  feature_info_tbl_[kDRMPanelFeatureDsppDemuraInfo] = DRMPanelFeatureInfo {
+    kDRMPanelFeatureDsppDemuraInfo, DRM_MODE_OBJECT_CRTC, UINT32_MAX, 1, 64, 0};
   feature_info_tbl_[kDRMPanelFeatureDsppRCInfo] = DRMPanelFeatureInfo {
     kDRMPanelFeatureDsppRCInfo, DRM_MODE_OBJECT_CRTC, UINT32_MAX, 1, 64, 0};
 }
 
-void DRMPanelFeatureMgr::DeInit() {
+void DRMPanelFeatureMgr::Deinit() {
   int ret = 0;
-  for (int i = 0; i < kDRMPanelFeatureMax; i++) {
+  for (int i = kDRMPanelFeatureDsppIndex; i < kDRMPanelFeatureMax; i++) {
     DRMPanelFeatureID prop_id = static_cast<DRMPanelFeatureID>(i);
     if (drm_prop_blob_ids_map_[prop_id]) {
       ret = drmModeDestroyPropertyBlob(dev_fd_, drm_prop_blob_ids_map_[prop_id]);
@@ -265,7 +284,20 @@ void DRMPanelFeatureMgr::GetPanelFeatureInfo(DRMPanelFeatureInfo *info) {
       drmModeFreeProperty(property);
       continue;
     }
-    else if (info->prop_id == kDRMPanelFeatureDsppRCInfo) {
+
+    if (info->prop_id == kDRMPanelFeatureSPRPackType) {
+      ParseCapabilities(props->prop_values[j],
+              reinterpret_cast<char *> (info->prop_ptr), info->prop_size, "spr_pack_type");
+    } else if (info->prop_id == kDRMPanelFeatureDsppIndex) {
+      ParseCapabilities(props->prop_values[j],
+              reinterpret_cast<char *> (info->prop_ptr), info->prop_size, "dspp_index");
+    } else if (info->prop_id == kDRMPanelFeatureDsppSPRInfo) {
+      ParseCapabilities(props->prop_values[j],
+              reinterpret_cast<char *> (info->prop_ptr), info->prop_size, "spr");
+    } else if (info->prop_id == kDRMPanelFeatureDsppDemuraInfo) {
+      ParseCapabilities(props->prop_values[j],
+              reinterpret_cast<char *> (info->prop_ptr), info->prop_size, "demura");
+    } else if (info->prop_id == kDRMPanelFeatureDsppRCInfo) {
       ParseDsppCapabilities(props->prop_values[j],
               reinterpret_cast<std::vector<int> *> (info->prop_ptr), &(info->prop_size), "rc");
     } else if (drm_prop_type_map_[info->prop_id] == DRMPropType::kPropBlob) {

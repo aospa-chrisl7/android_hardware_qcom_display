@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2020, The Linux Foundataion. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -63,6 +63,9 @@ enum PendingAction {
   kMultiDispProc = BITMAP(11),
   kMultiDispGetId = BITMAP(12),
   kSetModeFromClient = BITMAP(13),
+  kGetNumRenderIntents = BITMAP(14),
+  kGetRenderIntents = BITMAP(15),
+  kSetRenderIntentsData = BITMAP(16),
   kGetDetailedEnhancerData = BITMAP(21),
   kNoAction = BITMAP(31),
 };
@@ -114,6 +117,10 @@ static const std::string kStandard = "standard";
 static const std::string kAmazon = "amazon";
 static const std::string kNetflix = "netflix";
 static const std::string kEnhanced = "enhanced";
+
+// Color feature flags
+#define SDM_DITHER_LUMA_MODE 0x1
+#define SDM_PCC_BEFORE_POS 0x1
 
 // Enum to identify type of dynamic range of color mode.
 enum DynamicRangeType {
@@ -183,6 +190,7 @@ struct PPFeatureVersion {
   static const uint32_t kSDEIgcV30 = 17;
   static const uint32_t kSDEGamutV4 = 18;
   static const uint32_t kSDEPccV4 = 19;
+  static const uint32_t kSDEIgcV40 = 20;
 
   uint32_t version[kMaxNumPPFeatures];
   PPFeatureVersion() { memset(version, 0, sizeof(version)); }
@@ -313,6 +321,7 @@ struct SDEPccCfg {
 
   static SDEPccCfg *Init(uint32_t arg __attribute__((__unused__)));
   SDEPccCfg *GetConfig() { return this; }
+  uint64_t flags = 0;
 };
 
 struct SDEPccV4Coeff {
@@ -336,6 +345,7 @@ struct SDEPccV4Cfg {
 
   static SDEPccV4Cfg *Init(uint32_t arg __attribute__((__unused__)));
   SDEPccV4Cfg *GetConfig() { return this; }
+  uint64_t flags = 0;
 };
 
 struct SDEDitherCfg {
@@ -345,6 +355,7 @@ struct SDEDitherCfg {
   uint32_t length;
   uint32_t dither_matrix[16];
   uint32_t temporal_en;
+  uint32_t flags;
 
   static SDEDitherCfg *Init(uint32_t arg __attribute__((__unused__)));
   SDEDitherCfg *GetConfig() { return this; }
@@ -405,20 +416,22 @@ struct SDEPaData {
 };
 
 struct SDEIgcLUTData {
-  static const int kMaxIgcLUTEntries = 256;
+  static const int kMaxIgcLUTEntries = 257;
   uint32_t table_fmt = 0;
   uint32_t len = 0;
   uint32_t *c0_c1_data = NULL;
   uint32_t *c2_data = NULL;
 };
 
+#define IGC_DITHER_EN (1 << 0)
 struct SDEIgcV30LUTData {
-  static const int kMaxIgcLUTEntries = 256;
+  static const int kMaxIgcLUTEntries = 257;
   uint32_t table_fmt = 0;
   uint32_t len = 0;
   uint64_t c0_c1_data = 0;
   uint64_t c2_data = 0;
   uint32_t strength = 0;
+  uint64_t flags = 0;
 };
 
 struct SDEPgcLUTData {

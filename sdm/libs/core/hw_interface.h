@@ -23,40 +23,40 @@
 */
 
 /*
-* Changes from Qualcomm Innovation Center are provided under the following license:
-*
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*    * Redistributions of source code must retain the above copyright
-*      notice, this list of conditions and the following disclaimer.
-*
-*    * Redistributions in binary form must reproduce the above
-*      copyright notice, this list of conditions and the following
-*      disclaimer in the documentation and/or other materials provided
-*      with the distribution.
-*
-*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*      contributors may be used to endorse or promote products derived
-*      from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *    * Redistributions of source code must retain the above copyright
+ *      notice, this list of conditions and the following disclaimer.
+ *
+ *    * Redistributions in binary form must reproduce the above
+ *      copyright notice, this list of conditions and the following
+ *      disclaimer in the documentation and/or other materials provided
+ *      with the distribution.
+ *
+ *    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *      contributors may be used to endorse or promote products derived
+ *      from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #ifndef __HW_INTERFACE_H__
 #define __HW_INTERFACE_H__
@@ -89,19 +89,25 @@ struct HWScanInfo {
                  cea_scan_support(kScanNotSupported) { }
 };
 
+enum HWFeature {
+  kAllowedModeSwitch,
+  kHasCwbCrop,
+  kHasDedicatedCwb,
+};
+
 // HWEventHandler - Implemented in DisplayBase and HWInterface implementation
 class HWEventHandler {
  public:
   virtual DisplayError VSync(int64_t timestamp) = 0;
   virtual DisplayError Blank(bool blank) = 0;
   virtual void IdleTimeout() = 0;
-  virtual void ThermalEvent(int64_t thermal_level) = 0;
   virtual void CECMessage(char *message) = 0;
   virtual void IdlePowerCollapse() = 0;
   virtual void PingPongTimeout() = 0;
   virtual void PanelDead() = 0;
   virtual void HwRecovery(const HWRecoveryEvent sdm_event_code) = 0;
   virtual void Histogram(int histogram_fd, uint32_t blob_id) = 0;
+  virtual void HandleBacklightEvent(float brightness_level) = 0;
 
  protected:
   virtual ~HWEventHandler() { }
@@ -117,6 +123,7 @@ class HWInterface {
   virtual DisplayError Deinit() = 0;
   virtual DisplayError GetDisplayId(int32_t *display_id) = 0;
   virtual DisplayError GetActiveConfig(uint32_t *active_config) = 0;
+  virtual DisplayError GetConfigIndexForFps(uint32_t refresh_rate, uint32_t *config) = 0;
   virtual DisplayError GetDefaultConfig(uint32_t *default_config) = 0;
   virtual DisplayError GetNumDisplayAttributes(uint32_t *count) = 0;
   virtual DisplayError GetDisplayAttributes(uint32_t index,
@@ -155,20 +162,22 @@ class HWInterface {
   virtual DisplayError DumpDebugData() = 0;
   virtual DisplayError SetDppsFeature(void *payload, size_t size) = 0;
   virtual DisplayError GetDppsFeatureInfo(void *payload, size_t size) = 0;
-  virtual DisplayError HandleSecureEvent(SecureEvent secure_event, HWLayers *hw_layers) = 0;
+  virtual DisplayError HandleSecureEvent(SecureEvent secure_event, const HWQosData &qos_data) = 0;
   virtual DisplayError ControlIdlePowerCollapse(bool enable, bool synchronous) = 0;
   virtual DisplayError SetDisplayDppsAdROI(void *payload) = 0;
   virtual DisplayError SetDynamicDSIClock(uint64_t bit_clk_rate) = 0;
   virtual DisplayError GetDynamicDSIClock(uint64_t *bit_clk_rate) = 0;
-  virtual DisplayError TeardownConcurrentWriteback(void) = 0;
   virtual DisplayError GetDisplayIdentificationData(uint8_t *out_port, uint32_t *out_data_size,
                                                     uint8_t *out_data) = 0;
   virtual DisplayError SetFrameTrigger(FrameTriggerMode mode) = 0;
   virtual DisplayError SetBLScale(uint32_t level) = 0;
-  virtual DisplayError GetPanelBrightnessBasePath(std::string *base_path) = 0;
+  virtual DisplayError GetPanelBrightnessBasePath(std::string *base_path) const = 0;
   virtual DisplayError SetBlendSpace(const PrimariesTransfer &blend_space) = 0;
+  virtual DisplayError EnableSelfRefresh() = 0;
   virtual PanelFeaturePropertyIntf *GetPanelFeaturePropertyIntf() = 0;
-  virtual DisplayError DelayFirstCommit() = 0;
+  virtual DisplayError GetFeatureSupportStatus(const HWFeature feature, uint32_t *status) = 0;
+  virtual DisplayError TeardownConcurrentWriteback(void) = 0;
+  virtual DisplayError CancelDeferredPowerMode() = 0;
 
  protected:
   virtual ~HWInterface() { }

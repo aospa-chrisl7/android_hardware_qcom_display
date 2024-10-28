@@ -28,39 +28,35 @@
 */
 
 /*
-* Changes from Qualcomm Innovation Center are provided under the following license:
-*
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*    * Redistributions of source code must retain the above copyright
-*      notice, this list of conditions and the following disclaimer.
-*
-*    * Redistributions in binary form must reproduce the above
-*      copyright notice, this list of conditions and the following
-*      disclaimer in the documentation and/or other materials provided
-*      with the distribution.
-*
-*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*      contributors may be used to endorse or promote products derived
-*      from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+Changes from Qualcomm Innovation Center are provided under the following license:
+Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the
+disclaimer below) provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+    * Neither the name of Qualcomm Innovation Center, Inc. nor the
+      names of its contributors may be used to endorse or promote
+      products derived from this software without specific prior
+      written permission.
+
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <cutils/properties.h>
@@ -76,6 +72,7 @@
 #include <vector>
 
 #include "hwc_display_builtin.h"
+#include "hwc_color_mode_stc.h"
 #include "hwc_debugger.h"
 #include "hwc_session.h"
 
@@ -160,7 +157,7 @@ int HWCDisplayBuiltIn::Init() {
   if (status) {
     return status;
   }
-  color_mode_ = new HWCColorMode(display_intf_);
+  color_mode_ = new HWCColorModeStc(display_intf_);
   color_mode_->Init();
 
   int value = 0;
@@ -178,16 +175,31 @@ int HWCDisplayBuiltIn::Init() {
 
   is_primary_ = display_intf_->IsPrimaryDisplay();
 
+  windowed_display_ = Debug::GetWindowRect(is_primary_, &window_rect_.left, &window_rect_.top,
+                             &window_rect_.right, &window_rect_.bottom) == 0;
+  DLOGI("Window rect : [%f %f %f %f] is_primary_=%d", window_rect_.left, window_rect_.top,
+         window_rect_.right, window_rect_.bottom, is_primary_);
+
   if (is_primary_) {
-    windowed_display_ = Debug::GetWindowRect(&window_rect_.left, &window_rect_.top,
-                      &window_rect_.right, &window_rect_.bottom) != kErrorUndefined;
-    DLOGI("Window rect : [%f %f %f %f]", window_rect_.left, window_rect_.top,
-          window_rect_.right, window_rect_.bottom);
+    value = 0;
+    HWCDebugHandler::Get()->GetProperty(ENABLE_POMS_DURING_DOZE, &value);
+    enable_poms_during_doze_ = (value == 1);
+    if (enable_poms_during_doze_) {
+      DLOGI("Enable POMS during Doze mode %" PRIu64 , id_);
+    }
   }
+
+  HWCDebugHandler::Get()->GetProperty(PERF_HINT_WINDOW_PROP, &perf_hint_window_);
+  HWCDebugHandler::Get()->GetProperty(ENABLE_PERF_HINT_LARGE_COMP_CYCLE,
+                                      &perf_hint_large_comp_cycle_);
 
   value = 0;
   DebugHandler::Get()->GetProperty(DISABLE_DYNAMIC_FPS, &value);
   disable_dyn_fps_ = (value == 1);
+
+  value = 0;
+  DebugHandler::Get()->GetProperty(ENABLE_ROUNDED_CORNER, &value);
+  enable_round_corner_ = (value == 1);
 
   uint32_t config_index = 0;
   GetActiveDisplayConfig(&config_index);
@@ -202,18 +214,12 @@ int HWCDisplayBuiltIn::Init() {
   enhance_idle_time_ = (enhance_idle_time == 1);
   DLOGI("enhance_idle_time: %d", enhance_idle_time);
 
-  HWCDebugHandler::Get()->GetProperty(PERF_HINT_WINDOW_PROP, &perf_hint_window_);
-  HWCDebugHandler::Get()->GetProperty(ENABLE_PERF_HINT_LARGE_COMP_CYCLE,
-                                      &perf_hint_large_comp_cycle_);
-
   return status;
 }
 
 void HWCDisplayBuiltIn::Dump(std::ostringstream *os) {
   HWCDisplay::Dump(os);
-#ifndef TARGET_HEADLESS
   *os << histogram.Dump();
-#endif
 }
 
 void HWCDisplayBuiltIn::ValidateUiScaling() {
@@ -238,7 +244,9 @@ HWC2::Error HWCDisplayBuiltIn::Validate(uint32_t *out_num_types, uint32_t *out_n
 
   DTRACE_SCOPED();
 
-  if (display_paused_) {
+  // If no resources are available for the current display, mark it for GPU by pass and continue to
+  // do invalidate until the resources are available
+  if (display_paused_ || CheckResourceState()) {
     MarkLayersForGPUBypass();
     return status;
   }
@@ -250,6 +258,9 @@ HWC2::Error HWCDisplayBuiltIn::Validate(uint32_t *out_num_types, uint32_t *out_n
 
   // Fill in the remaining blanks in the layers and add them to the SDM layerstack
   BuildLayerStack();
+
+  // Track damage regions if needed.
+  EnablePartialUpdate();
 
   // Check for scaling layers during Doze mode
   ValidateUiScaling();
@@ -284,9 +295,14 @@ HWC2::Error HWCDisplayBuiltIn::Validate(uint32_t *out_num_types, uint32_t *out_n
     // here in a subsequent draw round. Readback is not allowed for any secure use case.
     readback_configured_ = !layer_stack_.flags.secure_present;
     if (readback_configured_) {
-      DisablePartialUpdateOneFrame();
+      uint32_t cwb_with_pu_supported = 0;
+      display_intf_->IsSupportedOnDisplay(kCwbCrop, &cwb_with_pu_supported);
+      if (!cwb_with_pu_supported) {  // If CWB ROI isn't supported, then go for full frame update.
+        DisablePartialUpdateOneFrame();
+      }
       layer_stack_.output_buffer = &output_buffer_;
-      layer_stack_.flags.post_processed_output = post_processed_output_;
+      layer_stack_.cwb_config = &cwb_config_;  // set the CWB config as specified by the CWB client.
+      layer_stack_.flags.post_processed_output = static_cast<bool>(cwb_config_.tap_point);
     }
   }
 
@@ -323,9 +339,6 @@ HWC2::Error HWCDisplayBuiltIn::Validate(uint32_t *out_num_types, uint32_t *out_n
     // Avoid flush for Command mode panel.
     flush_ = !client_connected_;
     validated_ = true;
-    layer_changes_.clear();
-    layer_requests_.clear();
-    DLOGV_IF(kTagDisplay, "layer_set is empty");
     return status;
   }
 
@@ -452,22 +465,54 @@ void HWCDisplayBuiltIn::SetPartialUpdate(DisplayConfigFixedInfo fixed_info) {
   client_target_->SetPartialUpdate(partial_update_enabled_);
 }
 
+HWC2::Error HWCDisplayBuiltIn::SetPowerMode(HWC2::PowerMode mode, bool teardown) {
+  DisplayConfigFixedInfo fixed_info = {};
+  display_intf_->GetConfig(&fixed_info);
+  bool command_mode = fixed_info.is_cmdmode;
+
+  auto status = HWCDisplay::SetPowerMode(mode, teardown);
+  if (status != HWC2::Error::None) {
+    return status;
+  }
+
   display_intf_->GetConfig(&fixed_info);
   is_cmd_mode_ = fixed_info.is_cmdmode;
   if (is_cmd_mode_ != command_mode) {
     SetPartialUpdate(fixed_info);
   }
 
+  return HWC2::Error::None;
+}
+
 HWC2::Error HWCDisplayBuiltIn::Present(shared_ptr<Fence> *out_retire_fence) {
   auto status = HWC2::Error::None;
 
   DTRACE_SCOPED();
 
-  if (display_paused_) {
-    DisplayError error = display_intf_->Flush(&layer_stack_);
-    validated_ = false;
-    if (error != kErrorNone) {
-      DLOGE("Flush failed. Error = %d", error);
+  // Proceed only if any resources are available to be allocated for the current display,
+  // Otherwise keep doing invalidate
+  if (CheckResourceState()) {
+    Refresh();
+    return status;
+  }
+
+  if (display_paused_ ) {
+    return status;
+  } else if (commit_state_ == kInternalCommit) {
+    // Commit got triggered as part of validate.
+    // Just return fence.
+    *out_retire_fence = retire_fence_;
+    // Client closes this fence.
+    retire_fence_ = nullptr;
+    // Subsequent commits have to be normal. Reset state.
+    commit_state_ = kNormalCommit;
+    validate_state_ = kSkipValidate;
+    if (revalidate_pending_) {
+      validated_ = false;
+      revalidate_pending_ = false;
+      if (force_reset_validate_) {
+        display_intf_->ClearLUTs();
+      }
     }
   } else {
     CacheAvrStatus();
@@ -486,8 +531,6 @@ HWC2::Error HWCDisplayBuiltIn::Present(shared_ptr<Fence> *out_retire_fence) {
       HandleFrameOutput();
       PostCommitStitchLayers();
       status = HWCDisplay::PostCommitLayerStack(out_retire_fence);
-<<<<<<< HEAD
-      SetBwLimitHint(true);
       display_intf_->GetConfig(&fixed_info);
       is_cmd_mode_ = fixed_info.is_cmdmode;
       if (is_cmd_mode_ != command_mode) {
@@ -502,8 +545,6 @@ HWC2::Error HWCDisplayBuiltIn::Present(shared_ptr<Fence> *out_retire_fence) {
         GetActiveConfig(&active_config);
         SetActiveConfigIndex(active_config);
       }
-=======
->>>>>>> parent of b5ff0fb41 (composer: add support for display bandwidth limits management)
     }
   }
 
@@ -511,8 +552,12 @@ HWC2::Error HWCDisplayBuiltIn::Present(shared_ptr<Fence> *out_retire_fence) {
 
   // In case of scaling UI layer for command mode, reset validate
   if (force_reset_validate_) {
-    validated_ = false;
-    display_intf_->ClearLUTs();
+    if (layer_stack_.block_on_fb) {
+      validated_ = false;
+      display_intf_->ClearLUTs();
+    } else {
+      revalidate_pending_ = true;
+    }
   }
   return status;
 }
@@ -636,15 +681,32 @@ HWC2::Error HWCDisplayBuiltIn::SetColorTransform(const float *matrix,
 
 HWC2::Error HWCDisplayBuiltIn::SetReadbackBuffer(const native_handle_t *buffer,
                                                  shared_ptr<Fence> acquire_fence,
-                                                 bool post_processed_output, CWBClient client) {
+                                                 CwbConfig cwb_config, CWBClient client) {
   if (cwb_client_ != client && cwb_client_ != kCWBClientNone) {
     DLOGE("CWB is in use with client = %d", cwb_client_);
     return HWC2::Error::NoResources;
   }
 
+  if (secure_event_ != kSecureEventMax) {
+    DLOGE("CWB is not supported as TUI transition is in progress");
+    return HWC2::Error::Unsupported;
+  }
+
   const private_handle_t *handle = reinterpret_cast<const private_handle_t *>(buffer);
-  if (!handle || (handle->fd < 0)) {
+  if (!handle) {
+    DLOGE("Bad parameter: handle is null");
     return HWC2::Error::BadParameter;
+  }
+
+  if (handle->fd < 0) {
+    DLOGE("Bad parameter: fd is null");
+    return HWC2::Error::BadParameter;
+  }
+
+  if ((client == kCWBClientExternal) && ((handle->flags &
+      private_handle_t::PRIV_FLAGS_UBWC_ALIGNED) || gralloc::IsUBwcFormat(handle->format))) {
+    DLOGE("UBWC formats not supported for CWB");
+    return HWC2::Error::Unsupported;
   }
 
   // Configure the output buffer as Readback buffer
@@ -658,11 +720,42 @@ HWC2::Error HWCDisplayBuiltIn::SetReadbackBuffer(const native_handle_t *buffer,
   output_buffer_.acquire_fence = acquire_fence;
   output_buffer_.handle_id = handle->id;
 
-  post_processed_output_ = post_processed_output;
+  if (output_buffer_.format == kFormatInvalid) {
+    DLOGW("Format %d is not supported by SDM", handle->format);
+    return HWC2::Error::BadParameter;
+  }
+
   readback_buffer_queued_ = true;
   readback_configured_ = false;
   validated_ = false;
   cwb_client_ = client;
+  cwb_config_ = cwb_config;
+  LayerRect &roi = cwb_config_.cwb_roi;
+  LayerRect &full_rect = cwb_config_.cwb_full_rect;
+  CwbTapPoint &tap_point = cwb_config_.tap_point;
+
+  DisplayError error = kErrorNone;
+  uint32_t buffer_width = 0, buffer_height = 0;
+  error = display_intf_->GetCwbBufferResolution(tap_point, &buffer_width, &buffer_height);
+  if (error) {
+    DLOGE("Configuring CWB Full rect failed.");
+    if (error == kErrorParameters) {
+      return HWC2::Error::BadParameter;
+    } else {
+      return HWC2::Error::Unsupported;
+    }
+  } else {
+    full_rect = LayerRect(0.0f, 0.0f, FLOAT(buffer_width), FLOAT(buffer_height));
+  }
+
+  DLOGV_IF(kTagClient, "CWB config from client: tap_point %d, CWB ROI Rect(%f %f %f %f), "
+           "PU_as_CWB_ROI %d, Cwb full rect : (%f %f %f %f)", tap_point,
+           roi.left, roi.top, roi.right, roi.bottom, cwb_config_.pu_as_cwb_roi,
+           full_rect.left, full_rect.top, full_rect.right, full_rect.bottom);
+
+  DLOGV_IF(kTagClient, "Successfully configured the output buffer: readback_buffer_queued_ %d, "
+           "readback_configured_ %d, cwb_client_ %d", readback_buffer_queued_,
+           readback_configured_, cwb_client_);
 
   return HWC2::Error::None;
 }
@@ -672,31 +765,100 @@ HWC2::Error HWCDisplayBuiltIn::GetReadbackBufferFence(shared_ptr<Fence> *release
 
   if (readback_configured_ && output_buffer_.release_fence) {
     *release_fence = output_buffer_.release_fence;
+    DLOGI("Successfully retrieved readback buffer fence for cwb clinet %d on tappoint %d",
+          cwb_client_, cwb_config_.tap_point);
   } else {
+    DLOGE("Failed to retrieve readback buffer fence: readback_configured_ %d, "
+          "output_buffer_.release_fence for client %d on tappoint %d ",
+          readback_configured_, cwb_client_, cwb_config_.tap_point);
     status = HWC2::Error::Unsupported;
   }
 
-  post_processed_output_ = false;
+  cwb_config_ = {};
   readback_buffer_queued_ = false;
   readback_configured_ = false;
   output_buffer_ = {};
   cwb_client_ = kCWBClientNone;
 
+  DLOGV_IF(kTagQDCM, "Successfully retrieved the buffer: cwb_tap_point %d, "
+           "readback_buffer_queued_ %d, readback_configured_ %d",
+           cwb_config_.tap_point, readback_buffer_queued_, readback_configured_);
+
   return status;
 }
 
-DisplayError HWCDisplayBuiltIn::TeardownConcurrentWriteback(void) {
-  DisplayError error = kErrorNotSupported;
+DisplayError HWCDisplayBuiltIn::TeardownConcurrentWriteback(bool *needs_refresh) {
+  if (!needs_refresh) {
+    return kErrorParameters;
+  }
+  if (cwb_client_ == kCWBClientNone) {
+    *needs_refresh = false;
+    return kErrorNone;
+  }
+  if (cwb_client_ == kCWBClientFrameDump) {
+    dump_frame_count_ = 0;
+    dump_output_to_file_ = false;
+    // Unmap and Free buffer
+    if (munmap(output_buffer_base_, output_buffer_info_.alloc_buffer_info.size) != 0) {
+      DLOGW("unmap failed with err %d", errno);
+    }
+    if (buffer_allocator_->FreeBuffer(&output_buffer_info_) != 0) {
+      DLOGW("FreeBuffer failed");
+    }
+    output_buffer_info_ = {};
+    output_buffer_base_ = nullptr;
+  } else if (cwb_client_ == kCWBClientColor) {
+    frame_capture_buffer_queued_ = false;
+    frame_capture_status_ = 0;
+  }
+  readback_buffer_queued_ = false;
+  cwb_config_ = {};
+  readback_configured_ = false;
+  output_buffer_ = {};
+  cwb_client_ = kCWBClientNone;
+  validated_ = false;
+
+  *needs_refresh = true;
+  return kErrorNone;
+}
+
+DisplayError HWCDisplayBuiltIn::TeardownCwbForVirtualDisplay() {
   if (Fence::Wait(output_buffer_.release_fence) != kErrorNone) {
     DLOGE("sync_wait error errno = %d, desc = %s", errno, strerror(errno));
     return kErrorResources;
   }
 
   if (display_intf_) {
-    error = display_intf_->TeardownConcurrentWriteback();
+    if (display_intf_->TeardownConcurrentWriteback() != kErrorNone) {
+      return kErrorNotSupported;
+    }
   }
 
-  return error;
+  if (cwb_client_ == kCWBClientFrameDump) {
+    dump_frame_count_ = 0;
+    dump_output_to_file_ = false;
+    // Unmap and Free buffer
+    if (munmap(output_buffer_base_, output_buffer_info_.alloc_buffer_info.size) != 0) {
+      DLOGW("unmap failed with err %d", errno);
+    }
+    if (buffer_allocator_->FreeBuffer(&output_buffer_info_) != 0) {
+      DLOGW("FreeBuffer failed");
+    }
+    output_buffer_info_ = {};
+    output_buffer_base_ = nullptr;
+  } else if (cwb_client_ == kCWBClientColor) {
+    frame_capture_buffer_queued_ = false;
+    frame_capture_status_ = 0;
+  }
+
+  layer_stack_.output_buffer = nullptr;
+  readback_buffer_queued_ = false;
+  cwb_config_ = {};
+  readback_configured_ = false;
+  output_buffer_ = {};
+  cwb_client_ = kCWBClientNone;
+
+  return kErrorNone;
 }
 
 HWC2::Error HWCDisplayBuiltIn::SetDisplayDppsAdROI(uint32_t h_start, uint32_t h_end,
@@ -849,6 +1011,26 @@ void HWCDisplayBuiltIn::ToggleCPUHint(bool set) {
   }
 }
 
+int HWCDisplayBuiltIn::GetActiveSecureSession(std::bitset<kSecureMax> *secure_sessions) {
+  if (!secure_sessions) {
+    return -1;
+  }
+  secure_sessions->reset();
+  for (auto hwc_layer : layer_set_) {
+    Layer *layer = hwc_layer->GetSDMLayer();
+    if (layer->input_buffer.flags.secure_camera) {
+      secure_sessions->set(kSecureCamera);
+    }
+    if (layer->input_buffer.flags.secure_display) {
+      secure_sessions->set(kSecureDisplay);
+    }
+  }
+  if (secure_event_ == kTUITransitionStart || secure_event_ == kTUITransitionPrepare) {
+    secure_sessions->set(kSecureTUI);
+  }
+  return 0;
+}
+
 int HWCDisplayBuiltIn::HandleSecureSession(const std::bitset<kSecureMax> &secure_sessions,
                                            bool *power_on_pending, bool is_active_secure_display) {
   if (!power_on_pending) {
@@ -869,7 +1051,8 @@ int HWCDisplayBuiltIn::HandleSecureSession(const std::bitset<kSecureMax> &secure
   if (active_secure_sessions_[kSecureDisplay] != secure_sessions[kSecureDisplay]) {
     SecureEvent secure_event =
         secure_sessions.test(kSecureDisplay) ? kSecureDisplayStart : kSecureDisplayEnd;
-    DisplayError err = display_intf_->HandleSecureEvent(secure_event, &layer_stack_);
+    bool needs_refresh = false;
+    DisplayError err = display_intf_->HandleSecureEvent(secure_event, &needs_refresh);
     if (err != kErrorNone) {
       DLOGE("Set secure event failed");
       return err;
@@ -916,12 +1099,14 @@ void HWCDisplayBuiltIn::SetIdleTimeoutMs(uint32_t timeout_ms, uint32_t inactive_
 
 void HWCDisplayBuiltIn::HandleFrameOutput() {
   if (readback_buffer_queued_) {
-    validated_ = false;
+    DLOGV_IF(kTagQDCM, "No pending readback buffer found on the queue.");
   }
 
   if (frame_capture_buffer_queued_) {
+    DLOGV_IF(kTagQDCM, "frame_capture_buffer_queued_ is in use. Handle frame capture.");
     HandleFrameCapture();
   } else if (dump_output_to_file_) {
+    DLOGV_IF(kTagQDCM, "dump_output_to_file is in use. Handle frame dump.");
     HandleFrameDump();
   }
 }
@@ -931,12 +1116,20 @@ void HWCDisplayBuiltIn::HandleFrameCapture() {
     frame_capture_status_ = Fence::Wait(output_buffer_.release_fence);
   }
 
+  DLOGV_IF(kTagQDCM, "Frame captured successfully for cwb_client %d on cwb_tap_point %d",
+           cwb_client_, cwb_config_.tap_point);
+
   frame_capture_buffer_queued_ = false;
   readback_buffer_queued_ = false;
-  post_processed_output_ = false;
+  cwb_config_ = {};
   readback_configured_ = false;
   output_buffer_ = {};
   cwb_client_ = kCWBClientNone;
+
+  DLOGV_IF(kTagQDCM, "Frame captured: frame_capture_buffer_queued_ %d "
+           "readback_buffer_queued_ %d cwb_tap_point %d readback_configured_ %d "
+           "cwb_client_ %d", frame_capture_buffer_queued_, readback_buffer_queued_,
+           cwb_config_.tap_point, readback_configured_, cwb_client_);
 }
 
 void HWCDisplayBuiltIn::HandleFrameDump() {
@@ -963,7 +1156,7 @@ void HWCDisplayBuiltIn::HandleFrameDump() {
       }
 
       readback_buffer_queued_ = false;
-      post_processed_output_ = false;
+      cwb_config_ = {};
       readback_configured_ = false;
 
       output_buffer_ = {};
@@ -975,32 +1168,41 @@ void HWCDisplayBuiltIn::HandleFrameDump() {
 }
 
 HWC2::Error HWCDisplayBuiltIn::SetFrameDumpConfig(uint32_t count, uint32_t bit_mask_layer_type,
-                                                  int32_t format, bool post_processed) {
-  HWCDisplay::SetFrameDumpConfig(count, bit_mask_layer_type, format, post_processed);
-  dump_output_to_file_ = bit_mask_layer_type & (1 << OUTPUT_LAYER_DUMP);
+                                                  int32_t format, const CwbConfig &cwb_config) {
+  bool dump_output_to_file = bit_mask_layer_type & (1 << OUTPUT_LAYER_DUMP);
   DLOGI("output_layer_dump_enable %d", dump_output_to_file_);
 
-  if (dump_output_to_file_) {
+  if (dump_output_to_file) {
     if (cwb_client_ != kCWBClientNone) {
       DLOGW("CWB is in use with client = %d", cwb_client_);
       return HWC2::Error::NoResources;
     }
   }
 
-  if (!count || !dump_output_to_file_ || (output_buffer_info_.alloc_buffer_info.fd >= 0)) {
+  if (!count || (dump_output_to_file && (output_buffer_info_.alloc_buffer_info.fd >= 0))) {
+    DLOGW("FrameDump Not enabled Framecount = %d dump_output_to_file = %d o/p fd = %d", count,
+          dump_output_to_file, output_buffer_info_.alloc_buffer_info.fd);
+    return HWC2::Error::None;
+  }
+
+  HWCDisplay::SetFrameDumpConfig(count, bit_mask_layer_type, format, cwb_config);
+
+  if (!dump_output_to_file) {
+    // output(cwb) not requested, return
     return HWC2::Error::None;
   }
 
   // Allocate and map output buffer
-  if (post_processed) {
-    // To dump post-processed (DSPP) output, use Panel resolution.
-    GetPanelResolution(&output_buffer_info_.buffer_config.width,
-                       &output_buffer_info_.buffer_config.height);
-  } else {
-    // To dump Layer Mixer output, use FrameBuffer resolution.
-    GetFrameBufferResolution(&output_buffer_info_.buffer_config.width,
-                             &output_buffer_info_.buffer_config.height);
+  const CwbTapPoint &tap_point = cwb_config.tap_point;
+  if (GetCwbBufferResolution(tap_point, &output_buffer_info_.buffer_config.width,
+                             &output_buffer_info_.buffer_config.height)) {
+    DLOGW("Buffer Resolution setting failed.");
+    return HWC2::Error::BadConfig;
   }
+
+  DLOGV_IF(kTagQDCM, "CWB output buffer resolution: width:%d height:%d tap point:%s",
+           output_buffer_info_.buffer_config.width, output_buffer_info_.buffer_config.height,
+           UINT32(tap_point) ? "DSPP" : "LM");
 
   output_buffer_info_.buffer_config.format = HWCLayer::GetSDMFormat(format, 0);
   output_buffer_info_.buffer_config.buffer_count = 1;
@@ -1022,13 +1224,57 @@ HWC2::Error HWCDisplayBuiltIn::SetFrameDumpConfig(uint32_t count, uint32_t bit_m
 
   output_buffer_base_ = buffer;
   const native_handle_t *handle = static_cast<native_handle_t *>(output_buffer_info_.private_data);
-  SetReadbackBuffer(handle, nullptr, post_processed, kCWBClientFrameDump);
+  HWC2::Error err = SetReadbackBuffer(handle, nullptr, cwb_config, kCWBClientFrameDump);
+  if (err != HWC2::Error::None) {
+    return err;
+  }
+  dump_output_to_file_ = dump_output_to_file;
 
   return HWC2::Error::None;
 }
 
+int HWCDisplayBuiltIn::ValidateFrameCaptureConfig(const BufferInfo &output_buffer_info,
+                                                  const CwbTapPoint &cwb_tappoint) {
+  if (cwb_tappoint < CwbTapPoint::kLmTapPoint || cwb_tappoint > CwbTapPoint::kDsppTapPoint) {
+    DLOGE("Invalid CWB tappoint passed by client ");
+    return -1;
+  } else if (cwb_tappoint == CwbTapPoint::kDsppTapPoint) {
+    auto panel_width = 0u;
+    auto panel_height = 0u;
+    GetPanelResolution(&panel_width, &panel_height);
+    if (output_buffer_info.buffer_config.width < panel_width ||
+        output_buffer_info.buffer_config.height < panel_height) {
+      DLOGE("Buffer dimensions should not be less than panel resolution");
+      return -1;
+    }
+  } else if (cwb_tappoint == CwbTapPoint::kLmTapPoint) {
+    uint32_t dest_scalar_enabled = 0;
+    display_intf_->IsSupportedOnDisplay(kDestinationScalar, &dest_scalar_enabled);
+    if (dest_scalar_enabled) {
+      auto mixer_width = 0u;
+      auto mixer_height = 0u;
+      GetMixerResolution(&mixer_width, &mixer_height);
+      if (output_buffer_info.buffer_config.width < mixer_width ||
+          output_buffer_info.buffer_config.height < mixer_height) {
+        DLOGE("Buffer dimensions should not be less than LM resolution");
+        return -1;
+      }
+    } else {
+      auto fb_width = 0u;
+      auto fb_height = 0u;
+      GetFrameBufferResolution(&fb_width, &fb_height);
+      if (output_buffer_info.buffer_config.width < fb_width ||
+          output_buffer_info.buffer_config.height < fb_height) {
+        DLOGE("Buffer dimensions should not be less than FB resolution");
+        return -1;
+      }
+    }
+  }
+  return 0;
+}
+
 int HWCDisplayBuiltIn::FrameCaptureAsync(const BufferInfo &output_buffer_info,
-                                         bool post_processed_output) {
+                                         const CwbConfig &cwb_config) {
   if (cwb_client_ != kCWBClientNone) {
     DLOGE("CWB is in use with client = %d", cwb_client_);
     return -1;
@@ -1040,26 +1286,13 @@ int HWCDisplayBuiltIn::FrameCaptureAsync(const BufferInfo &output_buffer_info,
     return -1;
   }
 
-  auto panel_width = 0u;
-  auto panel_height = 0u;
-  auto fb_width = 0u;
-  auto fb_height = 0u;
-
-  GetPanelResolution(&panel_width, &panel_height);
-  GetFrameBufferResolution(&fb_width, &fb_height);
-
-  if (post_processed_output && (output_buffer_info.buffer_config.width < panel_width ||
-                                output_buffer_info.buffer_config.height < panel_height)) {
-    DLOGE("Buffer dimensions should not be less than panel resolution");
-    return -1;
-  } else if (!post_processed_output && (output_buffer_info.buffer_config.width < fb_width ||
-                                        output_buffer_info.buffer_config.height < fb_height)) {
-    DLOGE("Buffer dimensions should not be less than FB resolution");
+  int error = ValidateFrameCaptureConfig(output_buffer_info, cwb_config.tap_point);
+  if (error) {
     return -1;
   }
 
   const native_handle_t *buffer = static_cast<native_handle_t *>(output_buffer_info.private_data);
-  SetReadbackBuffer(buffer, nullptr, post_processed_output, kCWBClientColor);
+  SetReadbackBuffer(buffer, nullptr, cwb_config, kCWBClientColor);
   frame_capture_buffer_queued_ = true;
   frame_capture_status_ = -EAGAIN;
 
@@ -1146,6 +1379,19 @@ DisplayError HWCDisplayBuiltIn::SetHWDetailedEnhancerConfig(void *params) {
         }
       }
 
+      switch (de_tuning_cfg_data->params.content_type) {
+        case kDeContentTypeVideo:
+          de_data.content_type = kContentTypeVideo;
+          break;
+        case kDeContentTypeGraphics:
+          de_data.content_type = kContentTypeGraphics;
+          break;
+        case kDeContentTypeUnknown:
+        default:
+          de_data.content_type = kContentTypeUnknown;
+          break;
+      }
+
       if (de_tuning_cfg_data->params.flags & kDeTuningFlagDeBlend) {
         de_data.override_flags |= kOverrideDEBlend;
         de_data.de_blend = de_tuning_cfg_data->params.de_blend;
@@ -1186,13 +1432,11 @@ HWC2::Error HWCDisplayBuiltIn::SetDisplayedContentSamplingEnabledVndService(bool
   std::unique_lock<decltype(sampling_mutex)> lk(sampling_mutex);
   vndservice_sampling_vote = enabled;
   if (api_sampling_vote || vndservice_sampling_vote) {
-#ifndef TARGET_HEADLESS
     histogram.start();
     display_intf_->colorSamplingOn();
   } else {
     display_intf_->colorSamplingOff();
     histogram.stop();
-#endif
   }
   return HWC2::Error::None;
 }
@@ -1213,7 +1457,6 @@ HWC2::Error HWCDisplayBuiltIn::SetDisplayedContentSamplingEnabled(int32_t enable
 
   auto start = api_sampling_vote || vndservice_sampling_vote;
   if (start && max_frames == 0) {
-#ifndef TARGET_HEADLESS
     histogram.start();
     display_intf_->colorSamplingOn();
   } else if (start) {
@@ -1222,26 +1465,20 @@ HWC2::Error HWCDisplayBuiltIn::SetDisplayedContentSamplingEnabled(int32_t enable
   } else {
     display_intf_->colorSamplingOff();
     histogram.stop();
-#endif
   }
   return HWC2::Error::None;
 }
 
 HWC2::Error HWCDisplayBuiltIn::GetDisplayedContentSamplingAttributes(
     int32_t *format, int32_t *dataspace, uint8_t *supported_components) {
-#ifndef TARGET_HEADLESS
- return histogram.getAttributes(format, dataspace, supported_components);
-#endif
- return HWC2::Error::None;
+  return histogram.getAttributes(format, dataspace, supported_components);
 }
 
 HWC2::Error HWCDisplayBuiltIn::GetDisplayedContentSample(
     uint64_t max_frames, uint64_t timestamp, uint64_t *numFrames,
     int32_t samples_size[NUM_HISTOGRAM_COLOR_COMPONENTS],
     uint64_t *samples[NUM_HISTOGRAM_COLOR_COMPONENTS]) {
-#ifndef TARGET_HEADLESS
   histogram.collect(max_frames, timestamp, samples_size, samples, numFrames);
-#endif
   return HWC2::Error::None;
 }
 
@@ -1308,61 +1545,6 @@ DisplayError HWCDisplayBuiltIn::GetDynamicDSIClock(uint64_t *bitclk) {
 DisplayError HWCDisplayBuiltIn::GetSupportedDSIClock(std::vector<uint64_t> *bitclk_rates) {
   if (display_intf_) {
     return display_intf_->GetSupportedDSIClock(bitclk_rates);
-  }
-
-  return kErrorNotSupported;
-}
-
-DisplayError HWCDisplayBuiltIn::SetStandByMode(bool enable, bool is_twm) {
-  if (enable) {
-    if (!display_null_.IsActive()) {
-      stored_display_intf_ = display_intf_;
-      display_intf_ = &display_null_;
-      shared_ptr<Fence> release_fence = nullptr;
-
-      if (is_twm && current_power_mode_ == HWC2::PowerMode::On) {
-        DLOGD("Display is in ON state and device is entering TWM mode.");
-        DisplayError error = stored_display_intf_->SetDisplayState(kStateDoze,
-                                false /* teardown */,
-                                &release_fence);
-        if (error != kErrorNone) {
-          if (error == kErrorShutDown) {
-            shutdown_pending_ = true;
-            return error;
-          }
-          DLOGE("Set state failed. Error = %d", error);
-          return error;
-        } else {
-          current_power_mode_ = HWC2::PowerMode::Doze;
-          DLOGD("Display moved to DOZE state.");
-        }
-      }
-
-      display_null_.SetActive(true);
-      DLOGD("Null display is connected successfully");
-    } else {
-      DLOGD("Null display is already connected.");
-    }
-  } else {
-    if (display_null_.IsActive()) {
-      if (is_twm) {
-        DLOGE("Unexpected event. Display state may be inconsistent.");
-        return kErrorNotSupported;
-      }
-      display_intf_ = stored_display_intf_;
-      validated_ = false;
-      display_null_.SetActive(false);
-      DLOGD("Display is connected successfully");
-    } else {
-      DLOGD("Display is already connected.");
-    }
-  }
-  return kErrorNone;
-}
-
-DisplayError HWCDisplayBuiltIn::DelayFirstCommit() {
-  if (display_intf_) {
-    return display_intf_->DelayFirstCommit();
   }
 
   return kErrorNotSupported;
@@ -1464,7 +1646,13 @@ bool HWCDisplayBuiltIn::HasSmartPanelConfig(void) {
     return IsSmartPanelConfig(config);
   }
 
-  return smart_panel_config_;
+  for (auto &config : variable_config_map_) {
+    if (config.second.smart_panel) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 int HWCDisplayBuiltIn::Deinit() {
@@ -1472,9 +1660,8 @@ int HWCDisplayBuiltIn::Deinit() {
   if (gl_layer_stitch_) {
     layer_stitch_task_.PerformTask(LayerStitchTaskCode::kCodeDestroyInstance, nullptr);
   }
-#ifndef TARGET_HEADLESS
+
   histogram.stop();
-#endif
   return HWCDisplay::Deinit();
 }
 
@@ -1565,9 +1752,9 @@ bool HWCDisplayBuiltIn::AllocateStitchBuffer() {
   config.cache = false;
   config.secure_camera = false;
 
-  error = buffer_allocator_->AllocateBuffer(&buffer_info_);
+  int err = buffer_allocator_->AllocateBuffer(&buffer_info_);
 
-  if (error != kErrorNone) {
+  if (err != 0) {
     DLOGE("Failed to allocate buffer. Error: %d", error);
     return false;
   }
@@ -1607,9 +1794,7 @@ void HWCDisplayBuiltIn::AppendStitchLayer() {
 }
 
 DisplayError HWCDisplayBuiltIn::HistogramEvent(int fd, uint32_t blob_id) {
-#ifndef TARGET_HEADLESS
   histogram.notify_histogram_event(fd, blob_id);
-#endif
   return kErrorNone;
 }
 
@@ -1624,18 +1809,69 @@ int HWCDisplayBuiltIn::PostInit() {
   return 0;
 }
 
+void HWCDisplayBuiltIn::SetCpuPerfHintLargeCompCycle() {
+  if (!cpu_hint_ || !perf_hint_large_comp_cycle_) {
+    DLOGV_IF(kTagResources, "cpu_hint_ not initialized or property not set");
+    return;
+  }
+
+  //Send large comp cycle hint only for fps >= 120
+  if (active_refresh_rate_ < 120) {
+    DLOGV_IF(kTagResources, "Skip large comp cycle hint for current fps - %u",
+             active_refresh_rate_);
+    return;
+  }
+
+  for (auto hwc_layer : layer_set_) {
+    Layer *layer = hwc_layer->GetSDMLayer();
+    if (layer->composition == kCompositionGPU) {
+      DLOGV_IF(kTagResources, "Set perf hint for large comp cycle");
+      int hwc_tid = gettid();
+      cpu_hint_->ReqHintsOffload(kPerfHintLargeCompCycle, hwc_tid);
+      break;
+    }
+  }
+}
+
+bool HWCDisplayBuiltIn::IsDisplayIdle() {
+  // Notify only if this display is source of vsync.
+  bool vsync_source = (callbacks_->GetVsyncSource() == id_);
+  return vsync_source && display_idle_;
+}
+
 bool HWCDisplayBuiltIn::HasReadBackBufferSupport() {
   DisplayConfigFixedInfo fixed_info = {};
   display_intf_->GetConfig(&fixed_info);
 
-  uint32_t width = UINT32(window_rect_.right + window_rect_.left);
-  uint32_t height = UINT32(window_rect_.bottom + window_rect_.top);
-  if (width > 0 || height > 0) {
-     DLOGE("No ReadBackBuffersupport on window_rect width = %u - height = %u",width,height);
-     return false;
+  return fixed_info.readback_supported;
+}
+
+void HWCDisplayBuiltIn::EnablePartialUpdate() {
+  if (partial_update_enabled_) {
+    return;
   }
 
-  return fixed_info.readback_supported;
+  if (!layer_stack_.flags.mask_present || enable_round_corner_) {
+    return;
+  }
+
+  // Update PU status.
+  partial_update_enabled_ = true;
+
+  for (auto hwc_layer : layer_set_) {
+    hwc_layer->SetPartialUpdate(partial_update_enabled_);
+  }
+  client_target_->SetPartialUpdate(partial_update_enabled_);
+}
+
+HWC2::Error HWCDisplayBuiltIn::NotifyDisplayCalibrationMode(bool in_calibration) {
+  auto status = color_mode_->NotifyDisplayCalibrationMode(in_calibration);
+  if (status != HWC2::Error::None) {
+    DLOGE("Failed for notify QDCM mode = %d", in_calibration);
+    return status;
+  }
+
+  return status;
 }
 
 uint32_t HWCDisplayBuiltIn::GetUpdatingAppLayersCount() {
@@ -1654,34 +1890,35 @@ uint32_t HWCDisplayBuiltIn::GetUpdatingAppLayersCount() {
   return updating_count;
 }
 
-bool HWCDisplayBuiltIn::IsDisplayIdle() {
-  // Notify only if this display is source of vsync.
-  bool vsync_source = (callbacks_->GetVsyncSource() == id_);
-  return vsync_source && display_idle_;
+HWC2::Error HWCDisplayBuiltIn::PresentAndOrGetValidateDisplayOutput(uint32_t *out_num_types,
+                                                                    uint32_t *out_num_requests) {
+  *out_num_types = UINT32(layer_changes_.size());
+  *out_num_requests = UINT32(layer_requests_.size());
+
+  auto status = (*out_num_types > 0) ? HWC2::Error::HasChanges : HWC2::Error::None;
+  if (layer_stack_.block_on_fb) {
+    return status;
+  }
+
+  // If a display is in internal Validate state, PresentDisplay can be triggered
+  // if there is no dependency on GPU composed output in current draw cycle.
+  shared_ptr<Fence> retire_fence = nullptr;
+  auto result = Present(&retire_fence);
+  if (result != HWC2::Error::None) {
+    DLOGE("Commit failed: %d", result);
+    return status;
+  }
+
+  // Store retire fence as client isn't concerned about it.
+  retire_fence_ = retire_fence;
+  // Validate State resets to kSkipValidate as part of PostCommit.
+  // Restore it to kInternal Validate.
+  validate_state_ = kInternalValidate;
+  // As part of  PostCommit() commit state changes to NormalCommit.
+  // Change it to InternalCommit so that next commit will be skipped.
+  commit_state_ = kInternalCommit;
+  layer_stack_.block_on_fb = true;
+
+  return status;
 }
-
-void HWCDisplayBuiltIn::SetCpuPerfHintLargeCompCycle() {
-  if (!cpu_hint_ || !perf_hint_large_comp_cycle_) {
-    DLOGV_IF(kTagResources, "cpu_hint_ not initialized or property not set");
-    return;
-  }
-
-  //Send large comp cycle hint only for fps >= 90
-  if (active_refresh_rate_ < 90) {
-    DLOGV_IF(kTagResources, "Skip large comp cycle hint for current fps - %u",
-             active_refresh_rate_);
-    return;
-  }
-
-  for (auto hwc_layer : layer_set_) {
-    Layer *layer = hwc_layer->GetSDMLayer();
-    if (layer->composition == kCompositionGPU) {
-      DLOGV_IF(kTagResources, "Set perf hint for large comp cycle");
-      int hwc_tid = gettid();
-      cpu_hint_->ReqHintsOffload(kPerfHintLargeCompCycle, hwc_tid);
-      break;
-    }
-  }
-}
-
 }  // namespace sdm

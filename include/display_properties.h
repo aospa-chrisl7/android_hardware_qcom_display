@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
+* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -24,40 +24,6 @@
 * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*
-* Changes from Qualcomm Innovation Center are provided under the following license:
-*
-* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*    * Redistributions of source code must retain the above copyright
-*      notice, this list of conditions and the following disclaimer.
-*
-*    * Redistributions in binary form must reproduce the above
-*      copyright notice, this list of conditions and the following
-*      disclaimer in the documentation and/or other materials provided
-*      with the distribution.
-*
-*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*      contributors may be used to endorse or promote products derived
-*      from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
@@ -114,6 +80,7 @@
 #define PRIORITIZE_CACHE_COMPOSITION_PROP    DISPLAY_PROP("prioritize_cache_comp")
 #define DISABLE_HW_RECOVERY_PROP             DISPLAY_PROP("disable_hw_recovery")
 #define DISABLE_HW_RECOVERY_DUMP_PROP        DISPLAY_PROP("disable_hw_recovery_dump")
+#define HW_RECOVERY_THRESHOLD                DISPLAY_PROP("hw_recovery_threshold")
 #define DISABLE_SRC_TONEMAP_PROP             DISPLAY_PROP("disable_src_tonemap")
 #define ENABLE_NULL_DISPLAY_PROP             DISPLAY_PROP("enable_null_display")
 #define DISABLE_EXCL_RECT_PROP               DISPLAY_PROP("disable_excl_rect")
@@ -147,24 +114,23 @@
 #define ENABLE_FORCE_SPLIT                   DISPLAY_PROP("enable_force_split")
 #define DISABLE_GPU_COLOR_CONVERT            DISPLAY_PROP("disable_gpu_color_convert")
 #define ENABLE_ASYNC_VDS_CREATION            DISPLAY_PROP("enable_async_vds_creation")
-// MMNOC efficiency factor for Camera and Non-Camera cases
-#define NORMAL_NOC_EFFICIENCY_FACTOR         DISPLAY_PROP("normal_noc_efficiency_factor")
-#define CAMERA_NOC_EFFICIENCY_FACTOR         DISPLAY_PROP("camera_noc_efficiency_factor")
 #define ENABLE_HISTOGRAM_INTR                DISPLAY_PROP("enable_hist_intr")
 #define DEFER_FPS_FRAME_COUNT                DISPLAY_PROP("defer_fps_frame_count")
 #define DISABLE_ROTATOR_PRE_DOWNSCALER_PROP  DISPLAY_PROP("disable_pre_downscaler")
 #define DISABLE_INLINE_ROTATOR_UI_PROP       DISPLAY_PROP("disable_inline_rotator_ui")
 #define ENABLE_POMS_DURING_DOZE              DISPLAY_PROP("enable_poms_during_doze")
-#define OVERRIDE_DOZE_MODE_PROP              DISPLAY_PROP("override_doze_mode")
 // RC
 #define ENABLE_ROUNDED_CORNER                DISPLAY_PROP("enable_rounded_corner")
 #define DISABLE_ROUNDED_CORNER_THREAD        DISPLAY_PROP("disable_rounded_corner_thread")
-#define DISABLE_DYNAMIC_FPS                  DISPLAY_PROP("disable_dynamic_fps")
-#define ENHANCE_IDLE_TIME                    DISPLAY_PROP("enhance_idle_time")
-#define ENABLE_QSYNC_IDLE                    DISPLAY_PROP("enable_qsync_idle")
+// SPR
+#define ENABLE_SPR                           DISPLAY_PROP("enable_spr")
+#define ENABLE_MEMORY_MAPPING                DISPLAY_PROP("enable_memory_mapping")
 
 // PERF hint properties
 #define ENABLE_PERF_HINT_LARGE_COMP_CYCLE    DISPLAY_PROP("enable_perf_hint_large_comp_cycle")
+#define DISABLE_DYNAMIC_FPS                  DISPLAY_PROP("disable_dynamic_fps")
+#define ENABLE_QSYNC_IDLE                    DISPLAY_PROP("enable_qsync_idle")
+#define ENHANCE_IDLE_TIME                    DISPLAY_PROP("enhance_idle_time")
 #define ENABLE_HDR10_GPU_TARGET              DISPLAY_PROP("enable_hdr10_gpu_target")
 
 // Add all vendor.display properties above
@@ -179,9 +145,9 @@
 
 #define ZERO_SWAP_INTERVAL                   "vendor.debug.egl.swapinterval"
 #define WINDOW_RECT_PROP                     DISPLAY_PROP("window_rect")
+#define WINDOW_RECT_PROP_SECONDARY           DISPLAY_PROP("window_rect_secondary")
 #define DISABLE_IDLE_TIME_HDR                DISPLAY_PROP("disable_idle_time_hdr")
 #define DISABLE_IDLE_TIME_VIDEO              DISPLAY_PROP("disable_idle_time_video")
-#define DISABLE_CACHE_MANAGER                DISPLAY_PROP("disable_cache_manager")
 // Add all other.properties above
 // End of property
 #endif  // __DISPLAY_PROPERTIES_H__

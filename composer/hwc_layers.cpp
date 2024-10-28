@@ -37,7 +37,7 @@ DisplayError SetCSC(const private_handle_t *pvt_handle, ColorMetaData *color_met
     ColorSpace_t csc = ITU_R_601;
     if (getMetaData(const_cast<private_handle_t *>(pvt_handle),  GET_COLOR_SPACE,
                     &csc) == 0) {
-      if (csc == ITU_R_601_FR || csc == ITU_R_2020_FR) {
+      if (csc == ITU_R_601_FR || csc == ITU_R_709_FR || csc == ITU_R_2020_FR) {
         color_metadata->range = Range_Full;
       }
       color_metadata->transfer = Transfer_sRGB;
@@ -49,6 +49,7 @@ DisplayError SetCSC(const private_handle_t *pvt_handle, ColorMetaData *color_met
           color_metadata->colorPrimaries = ColorPrimaries_BT601_6_525;
           break;
         case ITU_R_709:
+        case ITU_R_709_FR:
           color_metadata->colorPrimaries = ColorPrimaries_BT709_5;
           break;
         case ITU_R_2020:
@@ -470,6 +471,7 @@ HWC2::Error HWCLayer::SetLayerCompositionType(HWC2::Composition type) {
     layer_->update_mask.set(kClientCompRequest);
   }
   client_requested_ = type;
+  client_requested_orig_ = type;
   switch (type) {
     case HWC2::Composition::Client:
       break;
@@ -623,7 +625,7 @@ HWC2::Error HWCLayer::SetLayerVisibleRegion(hwc_region_t visible) {
 
 HWC2::Error HWCLayer::SetLayerZOrder(uint32_t z) {
   if (z_ != z) {
-#ifdef FOD_ZPOS
+#ifdef UDFPS_ZPOS
     if (z & FOD_PRESSED_LAYER_ZORDER) {
       fod_pressed_ = true;
       z &= ~FOD_PRESSED_LAYER_ZORDER;
@@ -861,7 +863,6 @@ LayerBufferFormat HWCLayer::GetSDMFormat(const int32_t &source, const int flags)
       format = kFormatBGR565;
       break;
     case HAL_PIXEL_FORMAT_NV12_ENCODEABLE:
-    case HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX:
     case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS:
       format = kFormatYCbCr420SemiPlanarVenus;
       break;

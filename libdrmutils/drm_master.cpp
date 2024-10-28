@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017 - 2018, 2021, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017 - 2018, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -37,9 +37,7 @@
 // that doesn't use keyword "virtual" for a variable name. Not doing so leads to the kernel version
 // of drm.h being included causing compilation to fail
 #include <drm/msm_drm.h>
-#ifdef KERNEL_5_4
-#include <drm/sde_drm.h>
-#endif
+#include <display/drm/sde_drm.h>
 #include <algorithm>
 #include <iterator>
 
@@ -140,10 +138,7 @@ int DRMMaster::RemoveFbId(uint32_t fb_id) {
     DRM_LOGE("drmIoctl::DRM_IOCTL_MSM_RMFB2 failed for fb_id %d with error %d", fb_id, errno);
   }
 #else
-  ret = drmModeRmFB(dev_fd_, fb_id);
-  if (ret) {
-    DRM_LOGE("drmModeRmFB failed for fb_id %d with error %d", fb_id, ret);
-  }
+  DRM_LOGE("drmModeRmFB is no longer used. DRM_IOCTL_MSM_RMFB2 not found");
 #endif
   return ret;
 }

@@ -101,6 +101,7 @@ class DisplayBase : public DisplayInterface {
   virtual DisplayError GetNumVariableInfoConfigs(uint32_t *count);
   virtual DisplayError GetConfig(uint32_t index, DisplayConfigVariableInfo *variable_info);
   virtual DisplayError GetConfig(DisplayConfigFixedInfo *fixed_info);
+  virtual DisplayError GetRealConfig(uint32_t index, DisplayConfigVariableInfo *variable_info);
   virtual DisplayError GetActiveConfig(uint32_t *index);
   virtual DisplayError GetVSyncState(bool *enabled);
   virtual DisplayError SetDisplayState(DisplayState state, bool teardown,
@@ -173,9 +174,7 @@ class DisplayBase : public DisplayInterface {
   virtual DisplayError GetClientTargetSupport(uint32_t width, uint32_t height,
                                               LayerBufferFormat format,
                                               const ColorMetaData &color_metadata);
-  virtual DisplayError HandleSecureEvent(SecureEvent secure_event, LayerStack *layer_stack) {
-    return kErrorNotSupported;
-  }
+  virtual DisplayError HandleSecureEvent(SecureEvent secure_event, bool *needs_refresh);
   virtual DisplayError SetDisplayDppsAdROI(void *payload) {
     return kErrorNotSupported;
   }
@@ -200,11 +199,21 @@ class DisplayBase : public DisplayInterface {
   virtual DisplayError colorSamplingOn();
   virtual DisplayError colorSamplingOff();
   virtual DisplayError ReconfigureDisplay();
+  virtual DisplayError GetStcColorModes(snapdragoncolor::ColorModeList *mode_list) {
+    return kErrorNotSupported;
+  }
+  virtual DisplayError SetStcColorMode(const snapdragoncolor::ColorMode &color_mode) {
+    return kErrorNotSupported;
+  }
   virtual DisplayError ClearLUTs() {
     return kErrorNotSupported;
   }
-  virtual DisplayError DelayFirstCommit();
-  QSyncMode active_qsync_mode_ = kQSyncModeNone;
+  virtual DisplayError IsSupportedOnDisplay(SupportedDisplayFeature feature, uint32_t *supported);
+  virtual DisplayError GetCwbBufferResolution(CwbTapPoint cwb_tappoint, uint32_t *x_pixels,
+                                              uint32_t *y_pixels);
+  virtual DisplayError NotifyDisplayCalibrationMode(bool in_calibration) {
+    return kErrorNotSupported;
+  }
 
  protected:
   const char *kBt2020Pq = "bt2020_pq";
@@ -241,7 +250,10 @@ class DisplayBase : public DisplayInterface {
   void InsertBT2020PqHlgModes(const std::string &str_render_intent);
   DisplayError SetupRC();
   DisplayError HandlePendingVSyncEnable(const shared_ptr<Fence> &retire_fence);
-  DisplayError HandlePendingPowerState(const shared_ptr<Fence> &retire_fence);
+  DisplayError ResetPendingPowerState(const shared_ptr<Fence> &retire_fence);
+  DisplayError GetPendingDisplayState(DisplayState *disp_state);
+  void SetPendingPowerState(DisplayState state);
+  DisplayError ConfigureCwb(LayerStack *layer_stack);
 
   recursive_mutex recursive_mutex_;
   int32_t display_id_ = -1;
@@ -284,6 +296,8 @@ class DisplayBase : public DisplayInterface {
   std::string current_color_mode_ = "hal_native";
   bool hw_recovery_logs_captured_ = false;
   int disable_hw_recovery_dump_ = 0;
+  uint32_t hw_recovery_count_ = 0;
+  uint32_t hw_recovery_threshold_ = 1;
   HWQosData cached_qos_data_;
   uint32_t default_clock_hz_ = 0;
   bool drop_hw_vsync_ = false;
@@ -291,14 +305,15 @@ class DisplayBase : public DisplayInterface {
   bool drop_skewed_vsync_ = false;
   bool custom_mixer_resolution_ = false;
   bool vsync_enable_pending_ = false;
-  bool pending_doze_ = false;
-  bool pending_power_on_ = false;
+  HWPowerState pending_power_state_ = kPowerStateNone;
   QSyncMode qsync_mode_ = kQSyncModeNone;
   bool needs_avr_update_ = false;
 
   static Locker display_power_reset_lock_;
   static bool display_power_reset_pending_;
+  SecureEvent secure_event_ = kSecureEventMax;
   bool rc_panel_feature_init_ = false;
+  bool spr_enable_ = false;
   bool rc_enable_prop_ = false;
   PanelFeatureFactoryIntf *pf_factory_ = nullptr;
   PanelFeaturePropertyIntf *prop_intf_ = nullptr;
@@ -308,9 +323,15 @@ class DisplayBase : public DisplayInterface {
   bool StartDisplayPowerReset();
   void EndDisplayPowerReset();
   void SetRCData(LayerStack *layer_stack);
+  DisplayError ValidateCwbConfigInfo(CwbConfig *cwb_config, const LayerBufferFormat &format);
+  bool IsValidCwbRoi(const LayerRect &cwb_roi, const LayerRect &full_frame);
   unsigned int rc_cached_res_width_ = 0;
   unsigned int rc_cached_res_height_ = 0;
   std::unique_ptr<RCIntf> rc_core_ = nullptr;
+  uint64_t rc_pu_flag_status_ = 0;
+  CwbConfig *cwb_config_ = NULL;
+  bool needs_refresh_ = false;
+  bool pending_commit_ = false;
 };
 
 }  // namespace sdm

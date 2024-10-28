@@ -25,6 +25,40 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*    * Redistributions of source code must retain the above copyright
+*      notice, this list of conditions and the following disclaimer.
+*
+*    * Redistributions in binary form must reproduce the above
+*      copyright notice, this list of conditions and the following
+*      disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*
+*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*      contributors may be used to endorse or promote products derived
+*      from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #ifndef __DRM_INTERFACE_H__
@@ -35,15 +69,13 @@
 #include <utility>
 #include <vector>
 #include <array>
+#include <set>
 
 #include "xf86drm.h"
 #include "xf86drmMode.h"
 #include <drm/msm_drm.h>
-#include <drm/msm_drm_pp.h>
-
-#ifdef KERNEL_5_4
-#include <drm/sde_drm.h>
-#endif
+#include <display/drm/msm_drm_pp.h>
+#include <display/drm/sde_drm.h>
 
 namespace sde_drm {
 
@@ -156,12 +188,6 @@ enum struct DRMOps {
    */
   PLANE_SET_MULTIRECT_MODE,
   /*
-   * Op: Sets sspp layout on this plane.
-   * Arg: uint32_t - Plane ID
-   *      uint32_t - SSPP Layout Index
-   */
-  PLANE_SET_SSPP_LAYOUT,
-  /*
    * Op: Sets rotator output frame buffer ID for plane.
    * Arg: uint32_t - Plane ID
    *      uint32_t - Framebuffer ID
@@ -185,6 +211,16 @@ enum struct DRMOps {
    *      DRMPPFeatureInfo * - PP feature data pointer
    */
   PLANE_SET_POST_PROC,
+  /*
+   * Op: Resets property cache of all planes that are assigned to given CRTC
+   * Arg: uint32_t - CRTC ID
+   */
+  PLANES_RESET_CACHE,
+  /*
+   *
+   * Op: Resets property  all planes LUT
+   */
+  PLANES_RESET_LUT,
   /*
    * Op: Activate or deactivate a CRTC
    * Arg: uint32_t - CRTC ID
@@ -314,6 +350,23 @@ enum struct DRMOps {
    *      uint32_t - idle pc state
    */
   CRTC_SET_IDLE_PC_STATE,
+  /*
+   * Op: Sets Cache state for CRTC.
+   * Arg: uint32_t - CRTC ID
+   *      uint32_t - Cache state
+   */
+  CRTC_SET_CACHE_STATE,
+  /*
+   * Op: Sets VM Request state for CRTC.
+   * Arg: uint32_t - CRTC ID
+   *      uint32_t - vm request state
+   */
+  CRTC_SET_VM_REQ_STATE,
+  /*
+   * Op: reset CRTC property cache.
+   * Arg: uint32_t - CRTC ID
+   */
+  CRTC_RESET_CACHE,
   /*
    * Op: Returns retire fence for this commit. Should be called after Commit() on
    * DRMAtomicReqInterface.
@@ -458,11 +511,22 @@ enum struct DRMDisplayType {
   VIRTUAL,
 };
 
+enum struct DRMVMRequestState {
+  NONE,
+  RELEASE,
+  ACQUIRE,
+};
+
 struct DRMRect {
   uint32_t left;    // Left-most pixel coordinate.
   uint32_t top;     // Top-most pixel coordinate.
   uint32_t right;   // Right-most pixel coordinate.
   uint32_t bottom;  // Bottom-most pixel coordinate.
+};
+
+enum struct DRMCWbCaptureMode {
+  MIXER_OUT,
+  DSPP_OUT,
 };
 
 //------------------------------------------------------------------------
@@ -529,6 +593,7 @@ struct DRMCrtcInfo {
   uint32_t min_prefill_lines = 0;
   int secure_disp_blend_stage = -1;
   bool concurrent_writeback = false;
+  std::vector<DRMCWbCaptureMode> tap_points;
   uint32_t vig_limit_index = 0;
   uint32_t dma_limit_index = 0;
   uint32_t scaling_limit_index = 0;
@@ -540,6 +605,7 @@ struct DRMCrtcInfo {
   bool use_baselayer_for_stage = false;
   bool has_micro_idle = false;
   uint32_t ubwc_version = 1;
+  bool has_spr = false;
   uint64_t rc_total_mem_size = 0;
 };
 
@@ -605,6 +671,7 @@ enum struct DRMTopology {
   QUAD_LM_MERGE,
   QUAD_LM_DSCMERGE,
   QUAD_LM_MERGE_DSC,
+  QUAD_LM_DSC4HSMERGE,
   PPSPLIT,
 };
 
@@ -628,6 +695,9 @@ struct DRMModeInfo {
   bool roi_merge;
   uint64_t bit_clk_rate;
   uint32_t transfer_time_us;
+  uint32_t allowed_mode_switch;
+  uint32_t has_cwb_crop;
+  uint32_t has_dedicated_cwb;
 };
 
 /* Per Connector Info*/
@@ -686,6 +756,7 @@ enum DRMPPFeatureID {
   kFeatureMixerGc,
   kFeaturePaV2,
   kFeatureDither,
+  kFeatureSprDither,
   kFeatureGamut,
   kFeaturePADither,
   kFeaturePAHsic,
@@ -781,8 +852,14 @@ struct DRMDppsFeatureInfo {
 };
 
 enum DRMPanelFeatureID {
-  kDRMPanelFeatureRCInit,
+  kDRMPanelFeatureDsppIndex,
+  kDRMPanelFeatureDsppSPRInfo,
+  kDRMPanelFeatureDsppDemuraInfo,
   kDRMPanelFeatureDsppRCInfo,
+  kDRMPanelFeatureSPRInit,
+  kDRMPanelFeatureSPRPackType,
+  kDRMPanelFeatureDemuraInit,
+  kDRMPanelFeatureRCInit,
   kDRMPanelFeatureMax,
 };
 
@@ -819,6 +896,7 @@ enum DRMCscType {
   kCscYuv2Rgb601L,
   kCscYuv2Rgb601FR,
   kCscYuv2Rgb709L,
+  kCscYuv2Rgb709FR,
   kCscYuv2Rgb2020L,
   kCscYuv2Rgb2020FR,
   kCscTypeMax,
@@ -851,21 +929,15 @@ enum struct DRMMultiRectMode {
   SERIAL = 2,
 };
 
-enum struct DRMSSPPLayoutIndex {
-  NONE = 0,
-  LEFT = 1,
-  RIGHT = 2,
-};
-
-enum struct DRMCWbCaptureMode {
-  MIXER_OUT = 0,
-  DSPP_OUT = 1,
-};
-
 enum struct DRMQsyncMode {
   NONE = 0,
   CONTINUOUS,
   ONESHOT,
+};
+
+enum struct DRMCacheState {
+  DISABLED = 0,
+  ENABLED,
 };
 
 enum struct DRMTopologyControl {
@@ -1094,6 +1166,13 @@ class DRMManagerInterface {
    * [input]: panel feature info data
    */
   virtual void SetPanelFeature(const DRMPanelFeatureInfo &info) = 0;
+
+  /*
+  *Get the set of possible encoders for any connector
+  [input]: Connector id
+  [output]: set of possible encoder's id
+  */
+  virtual int GetPossibleEncoders(uint32_t connector_id, std::set<uint32_t> *possible_encoders) = 0;
 };
 
 }  // namespace sde_drm

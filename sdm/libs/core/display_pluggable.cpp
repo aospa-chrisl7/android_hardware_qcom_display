@@ -247,6 +247,8 @@ void DisplayPluggable::HwRecovery(const HWRecoveryEvent sdm_event_code) {
 
 void DisplayPluggable::Histogram(int /* histogram_fd */, uint32_t /* blob_id */) {}
 
+void DisplayPluggable::HandleBacklightEvent(float /* brightness_level */) {}
+
 DisplayError DisplayPluggable::VSync(int64_t timestamp) {
   if (vsync_enable_) {
     DisplayEventVSync vsync;
@@ -359,7 +361,7 @@ static PrimariesTransfer GetBlendSpaceFromAttributes(const std::string &color_ga
 DisplayError DisplayPluggable::SetColorMode(const std::string &color_mode) {
   auto current_color_attr_ = color_mode_attr_map_.find(color_mode);
   if (current_color_attr_ == color_mode_attr_map_.end()) {
-    DLOGW("Failed to get the color mode = %s", color_mode.c_str());
+    DLOGE("Failed to get the color mode = %s", color_mode.c_str());
     return kErrorNone;
   }
   AttrVal attr = current_color_attr_->second;
@@ -379,12 +381,12 @@ DisplayError DisplayPluggable::SetColorMode(const std::string &color_mode) {
   PrimariesTransfer blend_space = GetBlendSpaceFromAttributes(color_gamut, transfer);
   error = comp_manager_->SetBlendSpace(display_comp_ctx_, blend_space);
   if (error != kErrorNone) {
-    DLOGW("Failed Set blend space, error = %d display_type_ = %d", error, display_type_);
+    DLOGE("Failed Set blend space, error = %d display_type_ = %d", error, display_type_);
   }
 
   error = hw_intf_->SetBlendSpace(blend_space);
   if (error != kErrorNone) {
-    DLOGW("Failed to pass blend space, error = %d display_type_ = %d", error, display_type_);
+    DLOGE("Failed to pass blend space, error = %d display_type_ = %d", error, display_type_);
   }
 
   current_color_mode_ = color_mode;

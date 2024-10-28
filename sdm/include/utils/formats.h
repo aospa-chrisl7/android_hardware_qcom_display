@@ -54,10 +54,12 @@ bool IsUBWCFormat(LayerBufferFormat format);
 bool Is10BitFormat(LayerBufferFormat format);
 const char *GetFormatString(const LayerBufferFormat &format);
 BufferLayout GetBufferLayout(LayerBufferFormat format);
-DisplayError GetBufferFormatTileSize(LayerBufferFormat format, FormatTileSize *tile_size);
+int GetBufferFormatTileSize(LayerBufferFormat format, FormatTileSize *tile_size);
 float GetBufferFormatBpp(LayerBufferFormat format);
+int GetCwbAlignmentFactor(LayerBufferFormat format);
 bool HasAlphaChannel(LayerBufferFormat format);
 bool IsWideColor(const ColorPrimaries &color_primary);
+bool IsRgbFormat(const LayerBufferFormat &format);
 
 }  // namespace sdm
 

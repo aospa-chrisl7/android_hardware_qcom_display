@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -83,6 +83,15 @@ DisplayError DisplayNull::GetConfig(DisplayConfigFixedInfo *fixed_info) {
   return kErrorNone;
 }
 
+DisplayError DisplayNull::GetRealConfig(uint32_t index, DisplayConfigVariableInfo *disp_attr) {
+  if (!disp_attr) {
+    return kErrorParameters;
+  }
+
+  *disp_attr = default_variable_config_;
+  return kErrorNone;
+}
+
 DisplayError DisplayNull::GetRefreshRateRange(uint32_t *min_refresh_rate,
                                               uint32_t *max_refresh_rate) {
   if (!min_refresh_rate || !max_refresh_rate) {
@@ -118,9 +127,7 @@ DisplayError DisplayNull::Prepare(LayerStack *layer_stack) {
   }
 
   for (auto layer : layer_stack->layers) {
-    if (layer->composition != kCompositionGPUTarget) {
-      layer->composition = kCompositionGPU;
-    }
+    layer->composition = kCompositionGPU;
   }
   return kErrorNone;
 }

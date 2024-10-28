@@ -38,7 +38,6 @@
 #define __BUFFER_SYNC_HANDLER_H__
 
 #include <sstream>
-#include "sdm_types.h"
 
 namespace sdm {
 
@@ -52,18 +51,6 @@ namespace sdm {
 */
 class BufferSyncHandler {
  public:
-  /*! @brief Method to wait for ouput buffer to be released.
-
-    @details This method waits for fd to be signaled by the producer/consumer with a default
-    timeout. It is the responsibility of the caller to close the file descriptor.
-
-    @param[in] fd file descriptor
-
-    @return \link DisplayError \endlink
-  */
-
-  virtual DisplayError SyncWait(int fd) = 0;
-
   /*! @brief Method to wait specified time for ouput buffer to be released.
 
     @details This method waits for fd to be signaled by the producer/consumer with a specified
@@ -71,10 +58,10 @@ class BufferSyncHandler {
 
     @param[in] fd file descriptor
 
-    @return \link DisplayError \endlink
+    @return \link int \endlink
   */
 
-  virtual DisplayError SyncWait(int fd, int timeout) = 0;
+  virtual int SyncWait(int fd, int timeout) = 0;
 
   /*! @brief Method to merge two sync fds into one sync fd
 
@@ -86,21 +73,10 @@ class BufferSyncHandler {
     @param[in] fd2 file descriptor 2
     @param[out] merged_fd
 
-    @return \link DisplayError \endlink
+    @return \link int \endlink
  */
 
-  virtual DisplayError SyncMerge(int fd1, int fd2, int *merged_fd) = 0;
-
-  /*! @brief Method to detect if sync fd is signaled
-
-    @details This method detects if sync fd is signaled. It is responsibility of the caller to
-    close file descriptor.
-
-    @param[in] fd file descriptor
-
-    @return True if fd has been signaled.
- */
-  virtual bool IsSyncSignaled(int fd) = 0;
+  virtual int SyncMerge(int fd1, int fd2, int *merged_fd) = 0;
 
   /*! @brief Method to get fence info associated to given file descriptor
 

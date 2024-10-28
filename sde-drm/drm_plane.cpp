@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2019-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -72,7 +72,7 @@
 // version drm/drm.h
 #include <drm_logger.h>
 #include <drm/drm_fourcc.h>
-#include <drm/sde_drm.h>
+#include <display/drm/sde_drm.h>
 
 #include <cstring>
 #include <map>
@@ -134,6 +134,17 @@ static struct sde_drm_csc_v1 csc_10bit_convert[kCscTypeMax] = {
     { 0xffc0, 0xfe00, 0xfe00,},
     { 0x0, 0x0, 0x0,},
     { 0x40, 0x3ac, 0x40, 0x3c0, 0x40, 0x3c0,},
+    { 0x0, 0x3ff, 0x0, 0x3ff, 0x0, 0x3ff,},
+  },
+  [kCscYuv2Rgb709FR] = {
+    {
+      0x100000000, 0x0, 0x193000000,
+      0x100000000, 0x7fd0000000, 0x7f88000000,
+      0x100000000, 0x1db000000, 0x0,
+    },
+    { 0x0, 0xfe00, 0xfe00,},
+    { 0x0, 0x0, 0x0, },
+    { 0x0, 0x3ff, 0x0, 0x3ff, 0x0, 0x3ff,},
     { 0x0, 0x3ff, 0x0, 0x3ff, 0x0, 0x3ff,},
   },
   [kCscYuv2Rgb2020L] = {
@@ -431,6 +442,26 @@ void DRMPlaneManager::UnsetScalerLUT() {
   if (sep_lut_blob_id_) {
     drmModeDestroyPropertyBlob(fd_, sep_lut_blob_id_);
     sep_lut_blob_id_ = 0;
+  }
+}
+
+
+void DRMPlaneManager::ResetPlanesLUT(drmModeAtomicReq *req) {
+  lock_guard<mutex> lock(lock_);
+  for (auto &plane : plane_pool_) {
+    plane.second->ResetPlanesLUT(req);
+  }
+}
+
+void DRMPlaneManager::ResetCache(drmModeAtomicReq *req, uint32_t crtc_id) {
+  lock_guard<mutex> lock(lock_);
+  for (auto &plane : plane_pool_) {
+    uint32_t assigned_crtc = 0;
+    plane.second->GetAssignedCrtc(&assigned_crtc);
+#ifndef TRUSTED_VM
+    if (assigned_crtc == crtc_id)
+#endif
+      plane.second->ResetCache(req);
   }
 }
 
@@ -1006,18 +1037,6 @@ void DRMPlane::Perform(DRMOps code, drmModeAtomicReq *req, va_list args) {
       }
     } break;
 
-    case DRMOps::PLANE_SET_SSPP_LAYOUT: {
-      if (!prop_mgr_.IsPropertyAvailable(DRMProperty::SDE_SSPP_LAYOUT)) {
-        DRM_LOGD("SSPP_LAYOUT property isn't exposed");
-        break;
-      }
-      DRMSSPPLayoutIndex layout_index = (DRMSSPPLayoutIndex) va_arg(args, uint32_t);
-      prop_id = prop_mgr_.GetPropertyId(DRMProperty::SDE_SSPP_LAYOUT);
-      AddProperty(req, obj_id, prop_id, (uint32_t)layout_index , true /* cache */,
-                  tmp_prop_val_map_);
-      DRM_LOGD("Plane %d: Setting SSPP Layout to %d", obj_id, layout_index);
-    } break;
-
     default:
       DRM_LOGE("Invalid opcode %d for DRM Plane %d", code, obj_id);
   }
@@ -1218,6 +1237,83 @@ void DRMPlane::ResetColorLUT(DRMPPFeatureID id, drmModeAtomicReq *req) {
   pp_feature_info.payload = nullptr;
   pp_feature_info.id = id;
   pp_mgr_->SetPPFeature(req, drm_plane_->plane_id, pp_feature_info);
+}
+
+
+void DRMPlane::ResetCache(drmModeAtomicReq *req) {
+  tmp_prop_val_map_.clear();
+  committed_prop_val_map_.clear();
+
+#ifdef TRUSTED_VM
+  for (int i = 0; i <= (int32_t)(DRMTonemapLutType::VIG_3D_GAMUT); i++) {
+    auto itr = plane_type_info_.tonemap_lut_version_map.find(static_cast<DRMTonemapLutType>(i));
+    if (itr != plane_type_info_.tonemap_lut_version_map.end()) {
+      DRMPlaneLutState *lut_state = nullptr;
+      DRMPPFeatureID feature_id = {};
+      switch (static_cast<DRMTonemapLutType>(i)) {
+        case DRMTonemapLutType::DMA_1D_GC:
+          lut_state = &dgm_1d_lut_gc_state_;
+          feature_id = kFeatureDgmGc;
+          break;
+        case DRMTonemapLutType::DMA_1D_IGC:
+          lut_state = &dgm_1d_lut_igc_state_;
+          feature_id = kFeatureDgmIgc;
+          break;
+        case DRMTonemapLutType::VIG_1D_IGC:
+          lut_state = &vig_1d_lut_igc_state_;
+          feature_id = kFeatureVigIgc;
+          break;
+        case DRMTonemapLutType::VIG_3D_GAMUT:
+          lut_state = &vig_3d_lut_gamut_state_;
+          feature_id = kFeatureVigGamut;
+          break;
+        default:
+          DLOGE("Invalid lut type = %d", i);
+          return;
+      }
+
+      *lut_state = kDirty;
+      ResetColorLUT(feature_id, req);
+    }
+  }
+#endif
+}
+
+void DRMPlane::ResetPlanesLUT(drmModeAtomicReq *req) {
+  tmp_prop_val_map_.clear();
+  committed_prop_val_map_.clear();
+
+  for (int i = 0; i <= (int32_t)(DRMTonemapLutType::VIG_3D_GAMUT); i++) {
+    auto itr = plane_type_info_.tonemap_lut_version_map.find(static_cast<DRMTonemapLutType>(i));
+    if (itr != plane_type_info_.tonemap_lut_version_map.end()) {
+      DRMPlaneLutState *lut_state = nullptr;
+      DRMPPFeatureID feature_id = {};
+      switch (static_cast<DRMTonemapLutType>(i)) {
+        case DRMTonemapLutType::DMA_1D_GC:
+          lut_state = &dgm_1d_lut_gc_state_;
+          feature_id = kFeatureDgmGc;
+          break;
+        case DRMTonemapLutType::DMA_1D_IGC:
+          lut_state = &dgm_1d_lut_igc_state_;
+          feature_id = kFeatureDgmIgc;
+          break;
+        case DRMTonemapLutType::VIG_1D_IGC:
+          lut_state = &vig_1d_lut_igc_state_;
+          feature_id = kFeatureVigIgc;
+          break;
+        case DRMTonemapLutType::VIG_3D_GAMUT:
+          lut_state = &vig_3d_lut_gamut_state_;
+          feature_id = kFeatureVigGamut;
+          break;
+        default:
+          DLOGE("Invalid lut type = %d", i);
+          return;
+      }
+
+      *lut_state = kDirty;
+      ResetColorLUT(feature_id, req);
+    }
+  }
 }
 
 }  // namespace sde_drm

@@ -14,7 +14,7 @@ cc_library_shared {
         "IQHDMIClient.cpp",
     ],
     sanitize: {
-         misc_undefined: [
+        misc_undefined: [
             "signed-integer-overflow",
             "unsigned-integer-overflow",
         ],
