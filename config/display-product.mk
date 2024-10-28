@@ -4,11 +4,11 @@ endif
 
 # Display product definitions
 PRODUCT_PACKAGES += \
-    android.hardware.graphics.mapper@3.0-impl-qti-display \
     android.hardware.graphics.mapper@4.0-impl-qti-display \
     vendor.qti.hardware.display.allocator-service \
     vendor.qti.hardware.display.composer-service \
     gralloc.$(TARGET_BOARD_PLATFORM) \
+    lights.$(TARGET_BOARD_PLATFORM) \
     hwcomposer.$(TARGET_BOARD_PLATFORM) \
     libsdmcore \
     libsdmutils \
@@ -19,24 +19,10 @@ PRODUCT_PACKAGES += \
     libdisplayconfig.qti \
     libdisplayconfig.vendor \
     libdisplayconfig.qti.vendor \
-    vendor.qti.hardware.display.mapper@2.0.vendor \
-    vendor.qti.hardware.display.mapper@3.0.vendor \
     vendor.qti.hardware.display.mapper@4.0.vendor \
     init.qti.display_boot.sh \
     init.qti.display_boot.rc \
     modetest
-
-ifneq ($(TARGET_DISABLE_MEMTRACK), true)
-ifeq ($(TARGET_USE_AIDL_QTI_MEMTRACK), true)
-PRODUCT_PACKAGES += \
-    vendor.qti.hardware.memtrack-service
-else
-PRODUCT_PACKAGES += \
-    android.hardware.memtrack@1.0-impl \
-    android.hardware.memtrack@1.0-service \
-    memtrack.default
-endif
-endif
 
 ifneq ($(TARGET_HAS_LOW_RAM),true)
 #QDCM calibration xml file for 2k panel
@@ -84,9 +70,11 @@ PRODUCT_PROPERTY_OVERRIDES += \
     persist.sys.sf.color_mode=9 \
     debug.sf.hw=0 \
     debug.egl.hw=0 \
+    debug.sf.enable_hwc_vds=0 \
     debug.sf.latch_unsignaled=1 \
     debug.sf.high_fps_late_app_phase_offset_ns=1000000 \
     debug.mdpcomp.logs=0 \
+    vendor.display.vds_allow_hwc=1 \
     vendor.gralloc.disable_ubwc=0 \
     vendor.display.disable_scaler=0 \
     vendor.display.disable_excl_rect=0 \
@@ -99,11 +87,10 @@ PRODUCT_PROPERTY_OVERRIDES += \
     vendor.display.enable_allow_idle_fallback=1 \
     vendor.display.disable_idle_time_video=1 \
     vendor.display.disable_idle_time_hdr=1 \
-    debug.sf.predict_hwc_composition_strategy=0 \
-    debug.sf.enable_gl_backpressure=1
+    debug.sf.predict_hwc_composition_strategy=0
 
-# Enable offline rotator for Bengal, Monaco, Khaje.
-ifneq ($(filter bengal monaco khaje, $(TARGET_BOARD_PLATFORM)),$(TARGET_BOARD_PLATFORM))
+# Enable offline rotator for Bengal, Monaco, Khaje, Trinket.
+ifneq ($(filter bengal monaco khaje trinket, $(TARGET_BOARD_PLATFORM)),$(TARGET_BOARD_PLATFORM))
 PRODUCT_PROPERTY_OVERRIDES += \
     vendor.display.disable_offline_rotator=1
 else
@@ -120,24 +107,23 @@ PRODUCT_PROPERTY_OVERRIDES += \
     debug.sf.high_fps_early_gl_phase_offset_ns=-5000000
 endif
 
-ifeq ($(TARGET_1G_DDR_RAM), true)
-PRODUCT_PROPERTY_OVERRIDES += \
-    vendor.display.disable_layer_stitch=1 \
-    vendor.display.disable_cache_manager=1
-endif
-
 ifeq ($(TARGET_BOARD_PLATFORM),monaco)
 PRODUCT_PROPERTY_OVERRIDES += \
     vendor.display.disable_layer_stitch=1
-PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.max_frame_buffer_acquired_buffers=3
 endif
 
 ifeq ($(TARGET_BOARD_PLATFORM),kona)
 PRODUCT_PROPERTY_OVERRIDES += \
+    debug.sf.enable_gl_backpressure=1 \
     debug.sf.enable_advanced_sf_phase_offset=1 \
     debug.sf.high_fps_late_sf_phase_offset_ns=-4000000 \
     debug.sf.high_fps_early_phase_offset_ns=-4000000 \
     debug.sf.high_fps_early_gl_phase_offset_ns=-4000000
+endif
+
+ifeq ($(TARGET_BOARD_PLATFORM),bengal)
+PRODUCT_PROPERTY_OVERRIDES += \
+    debug.sf.enable_gl_backpressure=0
 endif
 
 ifeq ($(TARGET_BOARD_PLATFORM),lito)
@@ -164,9 +150,10 @@ PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.has_HDR_display=true
 PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.use_color_management=true
 PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.wcg_composition_dataspace=143261696
 PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.protected_contents=true
+PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.set_touch_timer_ms=200
 PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.force_hwc_copy_for_virtual_displays=true
-PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.max_frame_buffer_acquired_buffers=3
 PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.max_virtual_display_dimension=4096
+PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.game_default_frame_rate_override=60
 
 ifneq (,$(filter userdebug eng, $(TARGET_BUILD_VARIANT)))
 # Recovery is enabled, logging is enabled
@@ -178,9 +165,44 @@ PRODUCT_PROPERTY_OVERRIDES += \
     vendor.display.disable_hw_recovery_dump=1
 endif
 
+ifeq ($(TARGET_HAS_QTI_OPTIMIZATIONS), true)
+PRODUCT_PROPERTY_OVERRIDES += \
+    vendor.display.disable_cache_manager=1 \
+    debug.disable_screen_decorations=1 \
+    ro.surface_flinger.max_frame_buffer_acquired_buffers=2
+else
+PRODUCT_PROPERTY_OVERRIDES += \
+    debug.disable_screen_decorations=0
+PRODUCT_DEFAULT_PROPERTY_OVERRIDES += \
+    ro.surface_flinger.max_frame_buffer_acquired_buffers=3
+endif
+
 # Enable power async mode
 PRODUCT_PROPERTY_OVERRIDES +=  vendor.display.enable_async_powermode=1
+# Soong Namespace
+SOONG_CONFIG_NAMESPACES += qtidisplay
+# Soong Keys
+SOONG_CONFIG_qtidisplay := drmpp headless llvmsa gralloc4 displayconfig_enabled default var1 var2 var3
 
+# Soong Values
+SOONG_CONFIG_qtidisplay_drmpp := true
+SOONG_CONFIG_qtidisplay_headless := false
+SOONG_CONFIG_qtidisplay_llvmsa := false
+SOONG_CONFIG_qtidisplay_gralloc4 := true
+
+SOONG_CONFIG_qtidisplay_displayconfig_enabled := false
+SOONG_CONFIG_qtidisplay_default := true
+SOONG_CONFIG_qtidisplay_var1 := false
+SOONG_CONFIG_qtidisplay_var2 := false
+SOONG_CONFIG_qtidisplay_var3 := false
+
+ifeq ($(call is-vendor-board-platform,QCOM),true)
+    SOONG_CONFIG_qtidisplay_displayconfig_enabled := true
+endif
+
+# Techpack values
+
+QMAA_ENABLED_HAL_MODULES += display
 ifeq ($(TARGET_USES_QMAA),true)
     ifneq ($(TARGET_USES_QMAA_OVERRIDE_DISPLAY),true)
         #QMAA Mode is enabled
@@ -188,59 +210,18 @@ ifeq ($(TARGET_USES_QMAA),true)
     endif
 endif
 
-# Soong Namespace
-SOONG_CONFIG_NAMESPACES += qtidisplay
-
-# Soong Keys
-SOONG_CONFIG_qtidisplay := drmpp headless llvmsa gralloc4 displayconfig_enabled udfps ycrcb_camera_encode no_raw10_custom_format
-
-# Soong Values
-SOONG_CONFIG_qtidisplay_drmpp := true
-SOONG_CONFIG_qtidisplay_headless := false
-SOONG_CONFIG_qtidisplay_llvmsa := false
-SOONG_CONFIG_qtidisplay_gralloc4 := true
-SOONG_CONFIG_qtidisplay_displayconfig_enabled := false
-SOONG_CONFIG_qtidisplay_udfps := false
-SOONG_CONFIG_qtidisplay_ycrcb_camera_encode := false
-SOONG_CONFIG_qtidisplay_no_raw10_custom_format := false
-
-ifeq ($(call is-vendor-board-platform,QCOM),true)
-    SOONG_CONFIG_qtidisplay_displayconfig_enabled := true
-endif
-
-ifeq ($(TARGET_USES_FOD_ZPOS), true)
-    SOONG_CONFIG_qtidisplay_udfps := true
-endif
-
-ifeq ($(TARGET_USES_YCRCB_CAMERA_ENCODE), true)
-    SOONG_CONFIG_qtidisplay_ycrcb_camera_encode := true
-endif
-
-ifeq ($(TARGET_NO_RAW10_CUSTOM_FORMAT), true)
-    SOONG_CONFIG_qtidisplay_no_raw10_custom_format := true
-endif
-
 ifeq ($(TARGET_IS_HEADLESS), true)
-    PRODUCT_SOONG_NAMESPACES += hardware/qcom/display/qmaa
     SOONG_CONFIG_qtidisplay_headless := true
+    PRODUCT_PROPERTY_OVERRIDES += \
+        vendor.display.enable_null_display=1
 else
-    #Packages that should not be installed in QMAA are enabled here.
+    PRODUCT_PROPERTY_OVERRIDES += \
+            vendor.display.enable_null_display=0
+    #Modules that shouldn't be enabled in QMAA go here
     PRODUCT_PACKAGES += libdrmutils
     PRODUCT_PACKAGES += libsdedrm
     PRODUCT_PACKAGES += libgpu_tonemapper
-    #Properties that should not be set in QMAA are enabled here.
-    PRODUCT_PROPERTY_OVERRIDES += \
-        vendor.display.enable_early_wakeup=1
-    PRODUCT_SOONG_NAMESPACES += hardware/qcom/display
 endif
-
-#Modules that will be added in QMAA/Non-QMAA paths
-PRODUCT_SOONG_NAMESPACES += hardware/qcom/display/gralloc
-PRODUCT_SOONG_NAMESPACES += hardware/qcom/display/init
-PRODUCT_SOONG_NAMESPACES += hardware/qcom/display/libdebug
-
-
-QMAA_ENABLED_HAL_MODULES += display
 
 # Properties using default value:
 #    vendor.display.disable_hw_recovery=0

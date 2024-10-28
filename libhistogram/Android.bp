@@ -27,6 +27,7 @@ cc_library_shared {
     header_libs: [
         "display_headers",
         "qti_kernel_headers",
+        "qti_display_kernel_headers",
     ],
 
     cflags: [
@@ -37,6 +38,7 @@ cc_library_shared {
         "-fno-operator-names",
         "-Wthread-safety",
     ],
+    clang: true,
     srcs: [
         "histogram_collector.cpp",
         "ringbuffer.cpp",
@@ -59,6 +61,7 @@ cc_binary {
     header_libs: [
         "display_headers",
         "qti_kernel_headers",
+        "qti_display_kernel_headers",
     ],
 
     cflags: [
@@ -69,6 +72,7 @@ cc_binary {
         "-fno-operator-names",
         "-Wthread-safety",
     ],
+    clang: true,
 
     vendor: true,
 
@@ -93,6 +97,7 @@ cc_binary {
     header_libs: [
         "display_headers",
         "qti_kernel_headers",
+        "qti_display_kernel_headers",
     ],
 
     cflags: [
@@ -103,6 +108,7 @@ cc_binary {
         "-fno-operator-names",
         "-Wthread-safety",
     ],
+    clang: true,
 
     vendor: true,
 

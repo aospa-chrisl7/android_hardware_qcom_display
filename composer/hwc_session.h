@@ -20,7 +20,7 @@
 /*
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -581,7 +581,8 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
   int bw_mode_release_fd_ = -1;
   qService::QService *qservice_ = nullptr;
   HWCSocketHandler socket_handler_;
-  bool hdmi_is_primary_ = false;
+  bool pluggable_is_primary_ = false;
+  bool null_display_active_ = false;
   bool is_composer_up_ = false;
   std::mutex mutex_lum_;
   int hpd_bpp_ = 0;
@@ -611,7 +612,6 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
   std::bitset<HWCCallbacks::kNumDisplays> display_ready_;
   bool secure_session_active_ = false;
   bool is_idle_time_up_ = false;
-  bool override_doze_mode_ = false;
 };
 }  // namespace sdm
 

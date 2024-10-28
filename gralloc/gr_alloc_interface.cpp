@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2020, The Linux Foundation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -27,53 +27,25 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __QTIQMAACOMPOSER_H__
-#define __QTIQMAACOMPOSER_H__
-
-#include <QtiQmaaComposerClient.h>
-
-// TODO(user): recheck on this header inclusion
-#include <hardware/hwcomposer2.h>
+#include <utils/debug.h>
+#include <utils/utils.h>
 #include <log/log.h>
+#include <cutils/properties.h>
 
-#include <unordered_set>
+#include "gr_alloc_interface.h"
+#include "gr_dma_legacy_mgr.h"
+#include "gr_dma_mgr.h"
 
-namespace vendor {
-namespace qti {
-namespace hardware {
-namespace display {
-namespace composer {
-namespace V3_0 {
-namespace implementation {
+namespace gralloc {
 
-using ::android::hardware::graphics::composer::V2_4::IComposer;
+AllocInterface *AllocInterface::GetInstance() {
+  // Detect DMABUF Heaps usage
+  char property[PROPERTY_VALUE_MAX];
+  if (property_get("vendor.gralloc.use_dma_buf_heaps", property, NULL) > 0) {
+    return DmaManager::GetInstance();
+  } else {
+    return DmaLegacyManager::GetInstance();
+  }
+}
 
-class QtiComposer : public IComposer {
- public:
-  QtiComposer();
-  virtual ~QtiComposer();
-  // Methods from ::android::hardware::graphics::composer::V2_1::IComposer follow.
-  Return<void> getCapabilities(getCapabilities_cb _hidl_cb) override;
-  Return<void> dumpDebugInfo(dumpDebugInfo_cb _hidl_cb) override;
-  Return<void> createClient(createClient_cb _hidl_cb) override;
-
-  // Methods from ::android::hardware::graphics::composer::V2_3::IComposer follow.
-  Return<void> createClient_2_3(createClient_2_3_cb _hidl_cb) override;
-
-  // Methods from ::android::hardware::graphics::composer::V2_4::IComposer follow.
-  Return<void> createClient_2_4(createClient_2_4_cb _hidl_cb) override;
-
-  // Methods from ::android::hidl::base::V1_0::IBase follow.
-
-  static QtiComposer *initialize();
-};
-
-}  // namespace implementation
-}  // namespace V3_0
-}  // namespace composer
-}  // namespace display
-}  // namespace hardware
-}  // namespace qti
-}  // namespace vendor
-
-#endif  // __QTIQMAACOMPOSER_H__
+}  // namespace gralloc

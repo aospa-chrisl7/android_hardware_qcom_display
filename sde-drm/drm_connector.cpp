@@ -27,10 +27,46 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*    * Redistributions of source code must retain the above copyright
+*      notice, this list of conditions and the following disclaimer.
+*
+*    * Redistributions in binary form must reproduce the above
+*      copyright notice, this list of conditions and the following
+*      disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*
+*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*      contributors may be used to endorse or promote products derived
+*      from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <drm.h>
-#include <drm/sde_drm.h>
+#include <display/drm/sde_drm.h>
 #include <drm/msm_drm.h>
 #include <drm_logger.h>
 #include <errno.h>
@@ -44,6 +80,7 @@
 #include <utility>
 #include <vector>
 #include <mutex>
+#include <inttypes.h>
 
 #include "drm_utils.h"
 #include "drm_property.h"
@@ -256,6 +293,18 @@ void DRMConnectorManager::Init(drmModeRes *resource) {
                resource->connectors[i]);
     }
   }
+}
+
+static vector<uint64_t> GetBitClkRates(const string &bitclk_rates) {
+  stringstream line(bitclk_rates);
+  string bitclk_rate {};
+  vector<uint64_t> dyn_bitclk_list {};
+
+  DRM_LOGI("Setting dynamic bitclk list: %s", bitclk_rates.c_str());
+  while (line >> bitclk_rate) {
+    dyn_bitclk_list.push_back(std::stoi(bitclk_rate));
+  }
+  return dyn_bitclk_list;
 }
 
 void DRMConnectorManager::Update() {
@@ -605,6 +654,8 @@ void DRMConnector::ParseModeProperties(uint64_t blob_id, DRMConnectorInfo *info)
   const string pu_roimerge = "partial_update_roimerge=";
   const string bit_clk_rate = "bit_clk_rate=";
   const string mdp_transfer_time_us = "mdp_transfer_time_us=";
+  const string dyn_bitclk_list = "dyn_bitclk_list=";
+  const string panel_mode_caps = "panel_mode_capabilities=";
 
   DRMModeInfo *mode_item = &info->modes.at(0);
   unsigned int index = 0;
@@ -636,9 +687,14 @@ void DRMConnector::ParseModeProperties(uint64_t blob_id, DRMConnectorInfo *info)
     } else if (line.find(pu_roimerge) != string::npos) {
       mode_item->roi_merge = std::stoi(string(line, pu_roimerge.length()));
     } else if (line.find(bit_clk_rate) != string::npos) {
-      mode_item->bit_clk_rate = std::stoi(string(line, bit_clk_rate.length()));
+      mode_item->default_bit_clk_rate = std::stoi(string(line, bit_clk_rate.length()));
+      mode_item->curr_bit_clk_rate = std::stoi(string(line, bit_clk_rate.length()));
     } else if (line.find(mdp_transfer_time_us) != string::npos) {
       mode_item->transfer_time_us = std::stoi(string(line, mdp_transfer_time_us.length()));
+    } else if (line.find(dyn_bitclk_list) != string::npos) {
+      mode_item->dyn_bitclk_list = GetBitClkRates(string(line, dyn_bitclk_list.length()));
+    } else if (line.find(panel_mode_caps) != string::npos) {
+      mode_item->panel_mode_caps = std::stoi(string(line, panel_mode_caps.length()));
     }
   }
 
@@ -712,7 +768,7 @@ int DRMConnector::GetInfo(DRMConnectorInfo *info) {
     DRM_LOGW("Zero modes on connector %u.", conn_id);
   }
 
-  if (!drm_connector_->modes) {
+  if (!drm_connector_->modes && drm_connector_->count_modes) {
     DLOGW("Connector %u not found.", conn_id);
     return 0;
   }
@@ -966,6 +1022,31 @@ void DRMConnector::Perform(DRMOps code, drmModeAtomicReq *req, va_list args) {
       } else {
         DRM_LOGE("Invalid colorspace %d", colorspace);
       }
+    } break;
+
+    case DRMOps::CONNECTOR_SET_DYN_BIT_CLK: {
+      if (!prop_mgr_.IsPropertyAvailable(DRMProperty::DYN_BIT_CLK)) {
+        return;
+      }
+      uint64_t drm_bit_clk_rate = va_arg(args, uint64_t);
+      uint32_t prop_id = prop_mgr_.GetPropertyId(DRMProperty::DYN_BIT_CLK);
+      int ret = drmModeAtomicAddProperty(req, obj_id, prop_id, drm_bit_clk_rate);
+      if (ret < 0) {
+        DRM_LOGE("AtomicAddProperty failed obj_id 0x%x, prop_id %d, bit_clk_rate %" PRIu64
+                 " ret %d", obj_id, prop_id, drm_bit_clk_rate, ret);
+      } else {
+        DRM_LOGD("Connector %d: Setting dynamic bit clk rate %" PRIu64, obj_id, drm_bit_clk_rate);
+      }
+    } break;
+
+    case DRMOps::CONNECTOR_SET_PANEL_MODE: {
+      if (!prop_mgr_.IsPropertyAvailable(DRMProperty::PANEL_MODE)) {
+        return;
+      }
+      uint32_t drm_panel_mode = va_arg(args, uint32_t);
+      drmModeAtomicAddProperty(req, obj_id, prop_mgr_.GetPropertyId(DRMProperty::PANEL_MODE),
+                               drm_panel_mode);
+      DRM_LOGD("Connector %d: Setting Panel mode 0x%x", obj_id, drm_panel_mode);
     } break;
 
     default:

@@ -1,12 +1,13 @@
-soong_namespace {
-    imports: [
-        "hardware/qcom/display",
-    ],
+prebuilt_etc {
+    name: "init.qti.display_boot.rc",
+    src: "init.qti.display_boot.rc",
+    sub_dir: "init",
+    vendor: true,
 }
-cc_prebuilt_binary {
+
+sh_binary {
     name: "init.qti.display_boot.sh",
+    src: "init.qti.display_boot.sh",
     vendor: true,
     device_supported: true,
-    srcs: ["init.qti.display_boot.sh"],
-    init_rc: ["init.qti.display_boot.rc"],
 }

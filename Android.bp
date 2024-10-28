@@ -1,10 +1,3 @@
-soong_namespace {
-    imports: [
-        "hardware/qcom/display/gralloc",
-        "hardware/qcom/display/libdebug",
-    ]
-}
-
 soong_config_module_type {
     name: "qtidisplay_cc_defaults",
     module_type: "cc_defaults",
@@ -14,9 +7,6 @@ soong_config_module_type {
         "headless",
         "llvmsa",
         "gralloc4",
-        "udfps",
-        "ycrcb_camera_encode",
-        "no_raw10_custom_format",
     ],
     properties: [
         "cflags",
@@ -25,10 +15,9 @@ soong_config_module_type {
 }
 
 qtidisplay_cc_defaults {
-    name: "qtidisplay_common_defaults",
+    name: "qtidisplay_defaults",
     cflags: [
         "-Wno-missing-field-initializers",
-        "-Wconversion",
         "-Wall",
         "-Werror",
     ],
@@ -37,6 +26,8 @@ qtidisplay_cc_defaults {
         "libcutils",
         "libutils",
     ],
+    header_libs: ["display_headers"],
+    clang: true,
     soong_config_variables: {
         drmpp: {
             cflags: ["-DPP_DRM_ENABLE"],
@@ -53,28 +44,7 @@ qtidisplay_cc_defaults {
         gralloc4: {
             cflags: ["-DTARGET_USES_GRALLOC4"],
         },
-        udfps: {
-            cflags: ["-DUDFPS_ZPOS"],
-        },
-        ycrcb_camera_encode: {
-            cflags: ["-DUSE_YCRCB_CAMERA_ENCODE"],
-        },
-        no_raw10_custom_format: {
-            cflags: ["-DNO_RAW10_CUSTOM_FORMAT"],
-        },
     },
-}
-
-qtidisplay_cc_defaults {
-    name: "qtidisplay_defaults",
-    defaults: ["qtidisplay_common_defaults"],
-    header_libs: ["display_headers"],
-}
-
-qtidisplay_cc_defaults {
-    name: "qti_qmaa_display_defaults",
-    defaults: ["qtidisplay_common_defaults"],
-    header_libs: ["qmaa_display_headers"],
 }
 
 cc_library_headers {
@@ -111,27 +81,12 @@ cc_library_headers {
     ],
 }
 
-cc_library_headers {
-    name: "qmaa_display_headers",
-    vendor: true,
-    export_include_dirs: [
-
-    ],
-    header_libs: [
-        "display_debug_headers",
-    ],
-    export_header_lib_headers: [
-        "display_debug_headers",
-    ],
-}
-
 subdirs = [
     "init",
     "libqservice",
     "libqdutils",
     "libddebug",
     "libdrmutils",
-    "libmemtrack",
     "libhistogram",
     "liblight",
     "composer",
@@ -141,5 +96,4 @@ subdirs = [
     "sde-drm",
     "sdm/libs/utils",
     "sdm/libs/core",
-    "qmaa",
 ]
