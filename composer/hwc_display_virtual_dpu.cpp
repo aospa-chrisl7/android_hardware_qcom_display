@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -25,6 +25,12 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include <hwc_display_virtual_dpu.h>
@@ -95,9 +101,11 @@ HWC2::Error HWCDisplayVirtualDPU::SetOutputBuffer(buffer_handle_t buf,
     return error;
   }
 
-  const private_handle_t *output_handle = static_cast<const private_handle_t *>(buf);
+  const native_handle_t *output_handle = static_cast<const native_handle_t *>(buf);
   if (output_handle) {
-    int output_handle_format = output_handle->format;
+    int output_handle_format;
+    buffer_allocator_->GetFormat(const_cast<native_handle_t *>(output_handle),
+                                 output_handle_format);
     int active_aligned_w, active_aligned_h;
     int new_width, new_height;
     int new_aligned_w, new_aligned_h;
@@ -117,28 +125,38 @@ HWC2::Error HWCDisplayVirtualDPU::SetOutputBuffer(buffer_handle_t buf,
         DLOGE("SetConfig failed custom WxH %dx%d", new_width, new_height);
         return HWC2::Error::BadParameter;
       }
-      validated_ = false;
     }
 
-    output_buffer_.width = UINT32(new_aligned_w);
-    output_buffer_.height = UINT32(new_aligned_h);
-    output_buffer_.unaligned_width = UINT32(new_width);
-    output_buffer_.unaligned_height = UINT32(new_height);
+    output_buffer_->width = UINT32(new_aligned_w);
+    output_buffer_->height = UINT32(new_aligned_h);
+    output_buffer_->unaligned_width = UINT32(new_width);
+    output_buffer_->unaligned_height = UINT32(new_height);
   }
 
   return HWC2::Error::None;
 }
 
-HWC2::Error HWCDisplayVirtualDPU::Validate(uint32_t *out_num_types, uint32_t *out_num_requests) {
+HWC2::Error HWCDisplayVirtualDPU::PreValidateDisplay(bool *exit_validate) {
+  // Draw method gets set as part of first commit.
+  SetDrawMethod();
+
   if (NeedsGPUBypass()) {
     MarkLayersForGPUBypass();
+    *exit_validate = true;
     return HWC2::Error::None;
   }
 
   BuildLayerStack();
-  layer_stack_.output_buffer = &output_buffer_;
+
+  // Client(SurfaceFlinger) doesn't retain framebuffer post GPU composition.
+  // This can result in flickers in cached framebuffer is used.
+  for (auto &layer : layer_stack_.layers) {
+    layer->flags.updating = true;
+  }
+
+  layer_stack_.output_buffer = output_buffer_;
   // If Output buffer of Virtual Display is not secure, set SKIP flag on the secure layers.
-  if (!output_buffer_.flags.secure && layer_stack_.flags.secure_present) {
+  if (!output_buffer_->flags.secure && layer_stack_.flags.secure_present) {
     for (auto hwc_layer : layer_set_) {
       Layer *layer = hwc_layer->GetSDMLayer();
       if (layer->input_buffer.flags.secure) {
@@ -148,35 +166,66 @@ HWC2::Error HWCDisplayVirtualDPU::Validate(uint32_t *out_num_types, uint32_t *ou
     }
   }
 
+  *exit_validate = false;
+
+  return HWC2::Error::None;
+}
+
+HWC2::Error HWCDisplayVirtualDPU::Validate(uint32_t *out_num_types, uint32_t *out_num_requests) {
+  bool exit_validate = false;
+  auto status = PreValidateDisplay(&exit_validate);
+  if (exit_validate) {
+    return status;
+  }
+
   return PrepareLayerStack(out_num_types, out_num_requests);
 }
 
 HWC2::Error HWCDisplayVirtualDPU::Present(shared_ptr<Fence> *out_retire_fence) {
   auto status = HWC2::Error::None;
 
-  if (!output_buffer_.buffer_id) {
+  if (!output_buffer_->buffer_id) {
     return HWC2::Error::NoResources;
   }
 
-  if (active_secure_sessions_.any()) {
-    return status;
+  if (NeedsGPUBypass()) {
+    return HWC2::Error::None;
   }
 
-  layer_stack_.output_buffer = &output_buffer_;
-  if (display_paused_) {
-    validated_ = false;
-    flush_ = true;
-  }
+  layer_stack_.output_buffer = output_buffer_;
 
   status = HWCDisplay::CommitLayerStack();
   if (status != HWC2::Error::None) {
     return status;
   }
 
+  status = PostCommitLayerStack(out_retire_fence);
+
+  return status;
+}
+
+HWC2::Error HWCDisplayVirtualDPU::PostCommitLayerStack(shared_ptr<Fence> *out_retire_fence) {
+  DTRACE_SCOPED();
+  // Retire fence points to WB done.
+  // Explicitly query for output buffer acquire fence.
+  display_intf_->GetOutputBufferAcquireFence(&layer_stack_.retire_fence);
+
   DumpVDSBuffer();
 
-  status = HWCDisplay::PostCommitLayerStack(out_retire_fence);
+  auto status = HWCDisplay::PostCommitLayerStack(out_retire_fence);
 
+  return status;
+}
+
+HWC2::Error HWCDisplayVirtualDPU::CommitOrPrepare(bool validate_only,
+                                                  shared_ptr<Fence> *out_retire_fence,
+                                                  uint32_t *out_num_types,
+                                                  uint32_t *out_num_requests, bool *needs_commit) {
+  DTRACE_SCOPED();
+
+  layer_stack_.output_buffer = output_buffer_;
+  auto status = HWCDisplay::CommitOrPrepare(validate_only, out_retire_fence, out_num_types,
+                                            out_num_requests, needs_commit);
   return status;
 }
 

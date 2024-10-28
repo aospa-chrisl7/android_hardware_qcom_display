@@ -4,6 +4,8 @@
  *
  * Copyright 2015 The Android Open Source Project
  *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -21,7 +23,7 @@
 #define __EGLIMAGE_BUFFER_H__
 
 #include <cutils/native_handle.h>
-#include <gralloc_priv.h>
+#include <QtiGrallocPriv.h>
 #include <ui/GraphicBuffer.h>
 #include "engine.h"
 
@@ -43,7 +45,7 @@ class EGLImageBuffer {
   void bindAsTexture(int target);
   void bindAsFramebuffer();
   ~EGLImageBuffer();
-  static EGLImageBuffer *from(const private_handle_t *src);
+  static EGLImageBuffer *from(const qtigralloc::private_handle_t *src);
   static void clear();
 };
 

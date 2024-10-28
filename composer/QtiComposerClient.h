@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2019-2020, The Linux Foundation. All rights reserved.
  * Not a Contribution.
  *
  * Copyright (C) 2017 The Android Open Source Project
@@ -20,7 +20,12 @@
 #ifndef __QTICOMPOSERCLIENT_H__
 #define __QTICOMPOSERCLIENT_H__
 
-#include <vendor/qti/hardware/display/composer/3.0/IQtiComposerClient.h>
+#define QTI_LOGE(format, ...) \
+  ALOGE("%s:" format, __FUNCTION__, ##__VA_ARGS__)
+#define QTI_LOGW(format, ...) \
+  ALOGW("%s:" format, __FUNCTION__, ##__VA_ARGS__)
+
+#include <vendor/qti/hardware/display/composer/3.1/IQtiComposerClient.h>
 #include <hidl/MQDescriptor.h>
 #include <hidl/Status.h>
 #include <log/log.h>
@@ -37,7 +42,7 @@ namespace qti {
 namespace hardware {
 namespace display {
 namespace composer {
-namespace V3_0 {
+namespace V3_1 {
 namespace implementation {
 
 namespace common_V1_0 = ::android::hardware::graphics::common::V1_0;
@@ -49,7 +54,6 @@ namespace composer_V2_2 = ::android::hardware::graphics::composer::V2_2;
 namespace composer_V2_3 = ::android::hardware::graphics::composer::V2_3;
 namespace composer_V2_4 = ::android::hardware::graphics::composer::V2_4;
 
-using DisplayCapability_V2_3 = composer_V2_3::IComposerClient::DisplayCapability;
 using PerFrameMetadataKey_V2 = composer_V2_2::IComposerClient::PerFrameMetadataKey;
 using PerFrameMetadataKey = composer_V2_3::IComposerClient::PerFrameMetadataKey;
 
@@ -213,6 +217,8 @@ class QtiComposerClient : public IQtiComposerClient {
   Return<composer_V2_4::Error> setContentType(
       uint64_t display, composer_V2_4::IComposerClient::ContentType type) override;
   Return<void> getLayerGenericMetadataKeys(getLayerGenericMetadataKeys_cb _hidl_cb) override;
+  Return<Error> tryDrawMethod(uint64_t display,
+      IQtiComposerClient::DrawMethod drawMethod) override;
 
   // Methods for RegisterCallback
   void enableCallback(bool enable);
@@ -257,6 +263,7 @@ class QtiComposerClient : public IQtiComposerClient {
   }
 
  private:
+  Error checkIfValidDisplay(uint64_t display);
   struct LayerBuffers {
     std::vector<BufferCacheEntry> Buffers;
     // the handle is a sideband stream handle, not a buffer handle
@@ -278,11 +285,7 @@ class QtiComposerClient : public IQtiComposerClient {
    public:
     explicit CommandReader(QtiComposerClient& client);
     Error parse();
-    Error validateDisplay(Display display, std::vector<Layer>& changedLayers,
-                          std::vector<IComposerClient::Composition>& compositionTypes,
-                          uint32_t& displayRequestMask, std::vector<Layer>& requestedLayers,
-                          std::vector<uint32_t>& requestMasks,
-                          IComposerClient::ClientTargetProperty& clienttargetproperty);
+    Error validateDisplay();
     Error presentDisplay(Display display, shared_ptr<Fence>* presentFence,
                          std::vector<Layer>& layers,
                          std::vector<shared_ptr<Fence>>& releaseFences);
@@ -313,6 +316,7 @@ class QtiComposerClient : public IQtiComposerClient {
     bool parseSetLayerVisibleRegion(uint16_t length);
     bool parseSetLayerZOrder(uint16_t length);
     bool parseSetLayerType(uint16_t length);
+    bool parseSetLayerFlag(uint16_t length);
 
     // Commands from ::android::hardware::graphics::composer::V2_2::IComposerClient follow.
     bool parseSetLayerPerFrameMetadata(uint16_t length);
@@ -322,6 +326,7 @@ class QtiComposerClient : public IQtiComposerClient {
     bool parseSetLayerColorTransform(uint16_t length);
     bool parseSetLayerPerFrameMetadataBlobs(uint16_t length);
     bool parseSetDisplayElapseTime(uint16_t length);
+    bool parseSetClientTarget_3_1(uint16_t length);
 
     bool parseCommonCmd(IComposerClient::Command command, uint16_t length);
 
@@ -353,6 +358,8 @@ class QtiComposerClient : public IQtiComposerClient {
     Error updateLayerSidebandStream(buffer_handle_t handle) {
       return updateBuffer(BufferCache::LAYER_SIDEBAND_STREAMS, 0, false, handle);
     }
+    Error postPresentDisplay(shared_ptr<Fence>* presentFence);
+    Error postValidateDisplay(uint32_t& types_count, uint32_t& reqs_count);
   };
 
   HWCSession *hwc_session_ = nullptr;
@@ -371,7 +378,7 @@ class QtiComposerClient : public IQtiComposerClient {
 extern "C" IQtiComposerClient* HIDL_FETCH_IQtiComposerClient(const char* name);
 
 }  // namespace implementation
-}  // namespace V3_0
+}  // namespace V3_1
 }  // namespace composer
 }  // namespace display
 }  // namespace hardware

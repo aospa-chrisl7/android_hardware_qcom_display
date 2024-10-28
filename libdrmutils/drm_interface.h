@@ -27,6 +27,13 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
+*/
+
 #ifndef __DRM_INTERFACE_H__
 #define __DRM_INTERFACE_H__
 
@@ -39,12 +46,8 @@
 #include "xf86drm.h"
 #include "xf86drmMode.h"
 #include <drm/msm_drm.h>
-#include <drm/msm_drm_pp.h>
-
-#ifdef KERNEL_5_4
-#include <drm/sde_drm.h>
-#endif
-
+#include <display/drm/msm_drm_pp.h>
+#include <display/drm/sde_drm.h>
 namespace sde_drm {
 
 typedef std::map<std::pair<uint32_t, uint64_t>, float> CompRatioMap;
@@ -156,12 +159,6 @@ enum struct DRMOps {
    */
   PLANE_SET_MULTIRECT_MODE,
   /*
-   * Op: Sets sspp layout on this plane.
-   * Arg: uint32_t - Plane ID
-   *      uint32_t - SSPP Layout Index
-   */
-  PLANE_SET_SSPP_LAYOUT,
-  /*
    * Op: Sets rotator output frame buffer ID for plane.
    * Arg: uint32_t - Plane ID
    *      uint32_t - Framebuffer ID
@@ -185,6 +182,39 @@ enum struct DRMOps {
    *      DRMPPFeatureInfo * - PP feature data pointer
    */
   PLANE_SET_POST_PROC,
+  /*
+   * Op: Sets FP16 CSC config on this plane.
+   * Arg: uint32_t - Plane ID
+   *      uint32_t - csc type
+   */
+  PLANE_SET_FP16_CSC_CONFIG,
+  /*
+   * Op: Sets FP16 CSC config on this plane.
+   * Arg: uint32_t - Plane ID
+   *      uint32_t - enable
+   */
+  PLANE_SET_FP16_IGC_CONFIG,
+  /*
+   * Op: Sets FP16 UNMULT config on this plane.
+   * Arg: uint32_t - Plane ID
+   *      uint32_t - enable
+   */
+  PLANE_SET_FP16_UNMULT_CONFIG,
+  /*
+   * Op: Sets FP16 GC config on this plane.
+   * Arg: uint32_t - Plane ID
+   *      drm_msm_fp16_gc* - GC config
+   */
+  PLANE_SET_FP16_GC_CONFIG,
+  /*
+   * Op: Resets property cache of all planes that are assigned to given CRTC
+   * Arg: uint32_t - CRTC ID
+   */
+  PLANES_RESET_CACHE,
+  /*
+   * Op: Resets SSPP Luts on all planes
+   */
+  PLANES_RESET_LUT,
   /*
    * Op: Activate or deactivate a CRTC
    * Arg: uint32_t - CRTC ID
@@ -216,7 +246,7 @@ enum struct DRMOps {
    *      uint32_t - core_ab
    */
   CRTC_SET_CORE_AB,
-   /*
+  /*
    * Op: Sets MNOC bus instantaneous bandwidth
    * Arg: uint32_t - CRTC ID
    *      uint32_t - core_ib
@@ -297,6 +327,12 @@ enum struct DRMOps {
    */
   CRTC_SET_SOLIDFILL_STAGES,
   /*
+   * Op: sets noise layer stage
+   * Arg: uint32_t - CRTC ID
+   *      uint64_t - Pointer to struct DRMNoiseLayerConfig
+   */
+  CRTC_SET_NOISELAYER_CONFIG,
+  /*
    * Op: Sets idle timeout.
    * Arg: uint32_t - CRTC ID
    *      uint32_t - idle timeout in ms
@@ -315,12 +351,36 @@ enum struct DRMOps {
    */
   CRTC_SET_IDLE_PC_STATE,
   /*
+   * Op: Sets Cache state for CRTC.
+   * Arg: uint32_t - CRTC ID
+   *      uint32_t - Cache state
+   */
+  CRTC_SET_CACHE_STATE,
+  /*
+   * Op: Sets VM Request state for CRTC.
+   * Arg: uint32_t - CRTC ID
+   *      uint32_t - vm request state
+   */
+  CRTC_SET_VM_REQ_STATE,
+  /*
+   * Op: reset CRTC property cache.
+   * Arg: uint32_t - CRTC ID
+   */
+  CRTC_RESET_CACHE,
+  /*
    * Op: Returns retire fence for this commit. Should be called after Commit() on
    * DRMAtomicReqInterface.
    * Arg: uint32_t - Connector ID
    *      int * - Pointer to an integer that will hold the returned fence
    */
   CONNECTOR_GET_RETIRE_FENCE,
+  /*
+   * Op: Sets retire fence offset on this connector.
+   * DRMAtomicReqInterface.
+   * Arg: uint32_t - Connector ID
+   *      uint32_t - Offset indicating number of cycles to advance retire fence.
+   */
+  CONNECTOR_SET_RETIRE_FENCE_OFFSET,
   /*
    * Op: Sets writeback connector destination rect
    * Arg: uint32_t - Connector ID
@@ -394,6 +454,11 @@ enum struct DRMOps {
    */
   COMMIT_PANEL_FEATURES,
   /*
+   * Op: Null Commit panel features.
+   * Arg: drmModeAtomicReq - Atomic request
+   */
+  NULL_COMMIT_PANEL_FEATURES,
+  /*
    * Op: Sets qsync mode on connector
    * Arg: uint32_t - Connector ID
    *     uint32_t - qsync mode
@@ -417,6 +482,73 @@ enum struct DRMOps {
    *      uint32_t - colorspace value bit-mask
    */
   CONNECTOR_SET_COLORSPACE,
+  /*
+   * Op: Sets currently chosen panel mode on this connector
+   * Arg: uint32_t - Video/Command Mode Bitmask
+   */
+  CONNECTOR_SET_PANEL_MODE,
+  /*
+   * Op: Sets new dynamic bit clk
+   * Arg: uint32_t - Connector ID
+   *      uint64_t - bit clk value
+   */
+  CONNECTOR_SET_DYN_BIT_CLK,
+  /*
+   * Op: Sets DSC/non-DSC operating mode
+   * Arg: uint32_t - Connector ID
+   *      uint64_t - DSC/non-DSC Bitmask
+   */
+  CONNECTOR_SET_DSC_MODE,
+  /*
+   * Op: Reset panel features.
+   * Arg: drmModeAtomicReq - Atomic request
+   */
+  RESET_PANEL_FEATURES,
+  /*
+   * Op: Set new transfer time value for the current mode
+   * Arg: uint32_t - New transfer time to be used
+   */
+  CONNECTOR_SET_TRANSFER_TIME,
+  /*
+   * Op: Get new transfer time value for the current mode from driver
+   * Arg: int * - Pointer to an integer that will hold the returned transfer time
+   */
+  CONNECTOR_GET_TRANSFER_TIME,
+  /*
+   * Op: Configures watchdog TE Jitter
+   * Arg: uint32_t - Jitter Type (0:2)
+   *      float    - Max jitter in percentage (0:10%)
+   *      uint32_t - Time in ms for long term jitter
+   */
+  CONNECTOR_SET_JITTER_CONFIG,
+  /*
+   * Op: set LLC cache state
+   * Arg: uint32_t - Connector ID
+   *      uint32_t - Enable-1, Disable-0
+   */
+  CONNECTOR_CACHE_STATE,
+  /*
+   * Op: set line number for early fence signaling
+   * Arg: uint32_t - Connector ID
+   *      uint32_t - line number
+   */
+  CONNECTOR_EARLY_FENCE_LINE,
+  /*
+   * Op: downscale blur properties
+   * Arg: drmModeAtomicReq - Atomic request
+   */
+  CONNECTOR_DNSC_BLR,
+  /*
+   * Op: WB usage type (wfd/cwb/iwe)
+   * Arg: drmModeAtomicReq - Atomic request
+   */
+  CONNECTOR_WB_USAGE_TYPE,
+  /*
+   * Op: Sets Cache state for Connector.
+   * Arg: uint32_t - Connector ID
+   *      uint32_t - Cache state
+   */
+  CONNECTOR_SET_CACHE_STATE,
 };
 
 enum struct DRMRotation {
@@ -438,6 +570,7 @@ enum struct DRMBlendType {
   OPAQUE = 1,
   PREMULTIPLIED = 2,
   COVERAGE = 3,
+  SKIP_BLENDING = 4,
 };
 
 enum struct DRMSrcConfig {
@@ -458,11 +591,29 @@ enum struct DRMDisplayType {
   VIRTUAL,
 };
 
+enum struct DRMVMRequestState {
+  NONE,
+  RELEASE,
+  ACQUIRE,
+};
+
 struct DRMRect {
   uint32_t left;    // Left-most pixel coordinate.
   uint32_t top;     // Top-most pixel coordinate.
   uint32_t right;   // Right-most pixel coordinate.
   uint32_t bottom;  // Bottom-most pixel coordinate.
+};
+
+struct DRMJitterConfig {
+  uint32_t type;    // Jitter type.
+  uint32_t value;   // Jitter value in percentage.
+  uint32_t time;    // Jitter time in ms.
+};
+
+enum struct DRMCWbCaptureMode {
+  MIXER_OUT,
+  DSPP_OUT,
+  DEMURA_OUT,
 };
 
 //------------------------------------------------------------------------
@@ -483,6 +634,8 @@ enum struct QSEEDStepVersion {
   V4,
   V3LITE_V4,
   V3LITE_V5,
+  V3LITE_V7,
+  V3LITE_V8,
 };
 
 enum struct SmartDMARevision {
@@ -497,6 +650,16 @@ enum struct InlineRotationVersion {
   kInlineRotationV1,
   kInlineRotationV2,
 };
+
+/* DDR Version */
+enum struct DDRVersion {
+  kDDRVersion4,
+  kDDRVersion5,
+};
+
+/* Type for panel feature resource reservation info */
+typedef std::tuple<std::string, int32_t, int8_t> FetchResource;
+typedef std::vector<FetchResource> FetchResourceList;
 
 /* Per CRTC Resource Info*/
 struct DRMCrtcInfo {
@@ -529,6 +692,7 @@ struct DRMCrtcInfo {
   uint32_t min_prefill_lines = 0;
   int secure_disp_blend_stage = -1;
   bool concurrent_writeback = false;
+  std::vector<DRMCWbCaptureMode> tap_points;
   uint32_t vig_limit_index = 0;
   uint32_t dma_limit_index = 0;
   uint32_t scaling_limit_index = 0;
@@ -540,7 +704,14 @@ struct DRMCrtcInfo {
   bool use_baselayer_for_stage = false;
   bool has_micro_idle = false;
   uint32_t ubwc_version = 1;
+  bool has_spr = false;
   uint64_t rc_total_mem_size = 0;
+  uint32_t demura_count = 0;
+  uint32_t dspp_count = 0;
+  bool skip_inline_rot_threshold = false;
+  bool has_noise_layer = false;
+  uint32_t dsc_block_count = 0;
+  DDRVersion ddr_version = DDRVersion::kDDRVersion5;
 };
 
 enum struct DRMPlaneType {
@@ -588,6 +759,8 @@ struct DRMPlaneTypeInfo {
   uint32_t dgm_csc_version = 0;  // csc used with DMA
   std::map<DRMTonemapLutType, uint32_t> tonemap_lut_version_map = {};
   bool block_sec_ui = false;
+  int32_t pipe_idx = -1;
+  int32_t demura_block_capability = -1;
 };
 
 // All DRM Planes as map<Plane_id , plane_type_info> listed from highest to lowest priority
@@ -605,6 +778,7 @@ enum struct DRMTopology {
   QUAD_LM_MERGE,
   QUAD_LM_DSCMERGE,
   QUAD_LM_MERGE_DSC,
+  QUAD_LM_DSC4HSMERGE,
   PPSPLIT,
 };
 
@@ -613,10 +787,22 @@ enum struct DRMPanelMode {
   COMMAND,
 };
 
+struct DRMSubModeInfo {
+  uint32_t panel_mode_caps;
+  uint32_t panel_compression_mode;
+  DRMTopology topology;
+  std::vector<uint64_t> dyn_bitclk_list;
+};
+
+enum DynamicFrontPorchType {
+  UNKNOWN,
+  VERTICAL,
+  HORIZONTAL
+};
+
 /* Per mode info */
 struct DRMModeInfo {
   drmModeModeInfo mode;
-  DRMTopology topology;
   // Valid only if mode is command
   int num_roi;
   int xstart;
@@ -626,8 +812,21 @@ struct DRMModeInfo {
   int wmin;
   int hmin;
   bool roi_merge;
-  uint64_t bit_clk_rate;
+  uint64_t default_bit_clk_rate;
   uint32_t transfer_time_us;
+  uint32_t transfer_time_us_min;
+  uint32_t transfer_time_us_max;
+  uint32_t allowed_mode_switch;
+  uint32_t cur_panel_mode;
+  uint32_t has_cwb_crop;
+  uint32_t has_dedicated_cwb;
+  uint32_t curr_submode_index = 0;
+  uint64_t curr_bit_clk_rate;
+  uint32_t curr_compression_mode;
+  DynamicFrontPorchType fp_type = UNKNOWN;
+  std::vector<uint32_t> dyn_fp_list;
+  std::vector<DRMSubModeInfo> sub_modes;
+  uint32_t qsync_min_fps;
 };
 
 /* Per Connector Info*/
@@ -657,6 +856,13 @@ struct DRMConnectorInfo {
   bool dyn_bitclk_support;
   std::vector<uint8_t> edid;
   uint32_t supported_colorspaces;
+  uint64_t panel_id = 0;
+  uint32_t qsync_fps;
+  bool has_cwb_dither = false;
+  uint32_t max_os_brightness;
+  uint32_t max_panel_backlight;
+  bool is_reserved;
+  std::string backlight_type;
 };
 
 // All DRM Connectors as map<Connector_id , connector_info>
@@ -686,6 +892,7 @@ enum DRMPPFeatureID {
   kFeatureMixerGc,
   kFeaturePaV2,
   kFeatureDither,
+  kFeatureSprDither,
   kFeatureGamut,
   kFeaturePADither,
   kFeaturePAHsic,
@@ -698,6 +905,10 @@ enum DRMPPFeatureID {
   kFeatureDgmGc,
   kFeatureVigIgc,
   kFeatureVigGamut,
+  kFeatureCWBDither,
+  kFeatureDimmingBlLut,
+  kFeatureDimmingDynCtrl,
+  kFeatureDimmingMinBl,
   kPPFeaturesMax,
 };
 
@@ -705,6 +916,7 @@ enum DRMPropType {
   kPropEnum,
   kPropRange,
   kPropBlob,
+  kPropBitmask,
   kPropTypeMax,
 };
 
@@ -715,6 +927,9 @@ struct DRMPPFeatureInfo {
   uint32_t payload_size;
   void *payload;
   uint32_t object_type;
+  bool is_event;
+  uint32_t drm_fd;
+  uint32_t event_type;
 };
 
 enum DRMDPPSFeatureID {
@@ -781,8 +996,16 @@ struct DRMDppsFeatureInfo {
 };
 
 enum DRMPanelFeatureID {
-  kDRMPanelFeatureRCInit,
+  kDRMPanelFeaturePanelId,
+  kDRMPanelFeatureDsppIndex,
+  kDRMPanelFeatureDsppSPRInfo,
+  kDRMPanelFeatureDsppDemuraInfo,
   kDRMPanelFeatureDsppRCInfo,
+  kDRMPanelFeatureSPRInit,
+  kDRMPanelFeatureSPRPackType,
+  kDRMPanelFeatureDemuraInit,
+  kDRMPanelFeatureRCInit,
+  kDRMPanelFeatureDemuraResources,
   kDRMPanelFeatureMax,
 };
 
@@ -819,8 +1042,11 @@ enum DRMCscType {
   kCscYuv2Rgb601L,
   kCscYuv2Rgb601FR,
   kCscYuv2Rgb709L,
+  kCscYuv2Rgb709FR,
   kCscYuv2Rgb2020L,
   kCscYuv2Rgb2020FR,
+  kCscYuv2RgbDolbyVisionP5,
+  kCscYuv2RgbDCIP3FR,
   kCscTypeMax,
 };
 
@@ -851,21 +1077,15 @@ enum struct DRMMultiRectMode {
   SERIAL = 2,
 };
 
-enum struct DRMSSPPLayoutIndex {
-  NONE = 0,
-  LEFT = 1,
-  RIGHT = 2,
-};
-
-enum struct DRMCWbCaptureMode {
-  MIXER_OUT = 0,
-  DSPP_OUT = 1,
-};
-
 enum struct DRMQsyncMode {
   NONE = 0,
   CONTINUOUS,
   ONESHOT,
+};
+
+enum struct DRMCacheState {
+  DISABLED = 0,
+  ENABLED,
 };
 
 enum struct DRMTopologyControl {
@@ -874,6 +1094,7 @@ enum struct DRMTopologyControl {
   RESERVE_CLEAR = 1 << 1,
   DSPP          = 1 << 2,
   DEST_SCALER   = 1 << 3,
+  DNSC_BLUR     = 1 << 6,
 };
 
 struct DRMSolidfillStage {
@@ -887,6 +1108,17 @@ struct DRMSolidfillStage {
   uint32_t color_bit_depth = 0;
   uint32_t z_order = 0;
   uint32_t plane_alpha = 0xff;
+};
+
+struct DRMNoiseLayerConfig {
+  bool enable = false;
+  uint64_t flags = 0;
+  uint32_t zpos_noise = 0;  // z_order for Noise layer
+  uint32_t zpos_attn = 0;   // z_order for attenuation layer
+  uint32_t attn_factor = 0;
+  uint32_t noise_strength = 0;
+  uint32_t alpha_noise = 0;
+  bool temporal_en = 0;
 };
 
 enum struct DRMFrameTriggerMode {
@@ -910,6 +1142,36 @@ enum struct DRMColorspace {
   BT2020_YCC,
   DCI_P3_RGB_D65,
   DCI_P3_RGB_THEATER,
+};
+
+enum struct DRMCompressionMode {
+  NONE = 0,
+  DSC_ENABLED,
+  DSC_DISABLED,
+};
+
+enum struct DRMWBUsageType {
+  WB_USAGE_WFD,
+  WB_USAGE_CWB,
+  WB_USAGE_OFFLINE_WB,
+};
+
+enum DRMFp16CscType {
+  kFP16CscSrgb2Dcip3 = 0,
+  kFP16CscSrgb2Bt2020,
+  kFP16CscTypeMax,
+};
+
+struct DRMFp16Config {
+  uint32_t igc_en;
+  uint32_t unmult_en;
+  uint32_t csc_idx;
+  drm_msm_fp16_gc gc;
+};
+
+enum struct DRMCacheWBState {
+  DISABLED = 0,
+  ENABLED,
 };
 
 /* DRM Atomic Request Property Set.
@@ -953,6 +1215,7 @@ typedef int (*GetDRMManager)(int fd, DRMManagerInterface **intf);
 
 /* Destroy DRMManager instance */
 typedef int (*DestroyDRMManager)();
+
 
 /*
  * DRM Manager Interface - Any class which plans to implement helper function for vendor
@@ -1094,6 +1357,41 @@ class DRMManagerInterface {
    * [input]: panel feature info data
    */
   virtual void SetPanelFeature(const DRMPanelFeatureInfo &info) = 0;
+
+  /*
+  * Mark particular panel feature property to be applied in the next null commit
+  * [input]: Display token to identify which display the property belongs to
+  * [input]: Feature ID
+  */
+  virtual void MarkPanelFeatureForNullCommit(const DRMDisplayToken &token,
+                                             const DRMPanelFeatureID &id) = 0;
+
+  /*
+  * Get the initial planes (cont. splash) info
+  * [input]: None
+  * [output]: Map from plane id to connector id
+  */
+  virtual void MapPlaneToConnector(std::map<uint32_t, uint32_t> *plane_to_connector) = 0;
+
+  /*
+   * Get the required Demura resources count for each Demura capable display type
+   * [output]: Key: display identifier Value: required demura resource count
+   */
+  virtual void GetRequiredDemuraFetchResourceCount(std::map<uint32_t, uint8_t>*
+                                                   required_demura_fetch_cnt) = 0;
+
+  /*
+  * Get the planes used for Demura in initial boot (cont. splash)
+  * [output]: List of plane ids that were used for Demura
+  */
+  virtual void GetInitialDemuraInfo(std::vector<uint32_t> *initial_demura_planes) = 0;
+
+  /*
+  * Get the total number of crtc supported
+  * [return]: crtc count
+  */
+  virtual uint32_t GetCrtcCount() = 0;
+
 };
 
 }  // namespace sde_drm

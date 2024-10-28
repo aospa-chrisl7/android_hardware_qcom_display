@@ -17,6 +17,13 @@
  * limitations under the License.
  */
 
+/*
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
 #include <vector>
 #include <string>
 
@@ -27,7 +34,7 @@ namespace qti {
 namespace hardware {
 namespace display {
 namespace composer {
-namespace V3_0 {
+namespace V3_1 {
 namespace implementation {
 
 ComposerHandleImporter mHandleImporter;
@@ -92,14 +99,7 @@ QtiComposerClient::~QtiComposerClient() {
     } else {
       ALOGW("performing a final presentDisplay");
 
-      std::vector<Layer> changedLayers;
-      std::vector<IComposerClient::Composition> compositionTypes;
-      uint32_t displayRequestMask = 0;
-      std::vector<Layer> requestedLayers;
-      std::vector<uint32_t> requestMasks;
-      IComposerClient::ClientTargetProperty clientTargetProperty;
-      mReader.validateDisplay(dpy.first, changedLayers, compositionTypes, displayRequestMask,
-                              requestedLayers, requestMasks, clientTargetProperty);
+      mReader.validateDisplay();
 
       hwc_session_->AcceptDisplayChanges(dpy.first);
 
@@ -195,7 +195,7 @@ Error QtiComposerClient::getFence(const hidl_handle& fenceHandle, shared_ptr<Fen
                                   const string& name) {
   auto handle = fenceHandle.getNativeHandle();
   if (handle && handle->numFds > 1) {
-    ALOGE("invalid fence handle with %d fds", handle->numFds);
+    QTI_LOGE("Invalid fence handle with %d fds", handle->numFds);
     return Error::BAD_PARAMETER;
   }
 
@@ -224,7 +224,7 @@ Error QtiComposerClient::getDisplayReadbackBuffer(Display display,
                                                   const native_handle_t** outHandle) {
   // TODO(user): revisit for caching and freeBuffer in success case.
   if (!mHandleImporter.importBuffer(rawHandle)) {
-    ALOGE("%s: importBuffer failed: ", __FUNCTION__);
+    QTI_LOGE("ImportBuffer failed: ");
     return Error::NO_RESOURCES;
   }
 
@@ -470,6 +470,13 @@ Return<void> QtiComposerClient::getDisplayType(uint64_t display, getDisplayType_
 
 Return<void> QtiComposerClient::getDozeSupport(uint64_t display, getDozeSupport_cb _hidl_cb) {
   int32_t hwc_support = 0;
+
+  std::lock_guard<std::mutex> lock(mDisplayDataMutex);
+  if (mDisplayData.find(display) == mDisplayData.end()) {
+    _hidl_cb(Error::BAD_DISPLAY, hwc_support);
+    return Void();
+  }
+
   auto error = hwc_session_->GetDozeSupport(display, &hwc_support);
 
   _hidl_cb(static_cast<Error>(error), hwc_support);
@@ -566,6 +573,8 @@ Return<void> QtiComposerClient::executeCommands(uint32_t inLength,
                                                 executeCommands_cb _hidl_cb) {
   std::lock_guard<std::mutex> lock(mCommandMutex);
 
+  std::lock_guard<std::mutex> hwc_lock(hwc_session_->command_seq_mutex_);
+
   bool outChanged = false;
   uint32_t outLength = 0;
   hidl_vec<hidl_handle> outHandles;
@@ -652,6 +661,13 @@ Return<Error> QtiComposerClient::setReadbackBuffer(uint64_t display, const hidl_
     return error;
   }
 
+  {
+    std::lock_guard<std::mutex> lock(mDisplayDataMutex);
+    if (mDisplayData.find(display) == mDisplayData.end()) {
+      return Error::BAD_DISPLAY;
+    }
+  }
+
   const native_handle_t* readbackBuffer;
   getDisplayReadbackBuffer(display, buffer.getNativeHandle(), &readbackBuffer);
   if (error != Error::NONE) {
@@ -734,6 +750,12 @@ Return<void> QtiComposerClient::getRenderIntents(uint64_t display, common_V1_1::
     return Void();
   }
 
+  std::lock_guard<std::mutex> lock(mDisplayDataMutex);
+  if (mDisplayData.find(display) == mDisplayData.end()) {
+    _hidl_cb(Error::BAD_DISPLAY, intents);
+    return Void();
+  }
+
   intents.resize(count);
   error = hwc_session_->GetRenderIntents(display, int32_t(mode), &count,
   reinterpret_cast<std::underlying_type<RenderIntent>::type*>(intents.data()));
@@ -776,6 +798,9 @@ Return<void> QtiComposerClient::executeCommands_2_2(uint32_t inLength,
                                                     executeCommands_2_2_cb _hidl_cb) {
   std::lock_guard<std::mutex> lock(mCommandMutex);
 
+  // This lock ensures that Client gets exclusive access to hwc display.
+  // Failing which return to SF will be blocked leading to fence timeouts.
+  std::lock_guard<std::mutex> hwc_lock(hwc_session_->command_seq_mutex_);
   bool outChanged = false;
   uint32_t outLength = 0;
   hidl_vec<hidl_handle> outHandles;
@@ -892,6 +917,7 @@ Return<void> QtiComposerClient::executeCommands_2_3(uint32_t inLength,
   // TODO(user): Implement combinedly w.r.t executeCommands_2_2
   std::lock_guard<std::mutex> lock(mCommandMutex);
 
+  std::lock_guard<std::mutex> hwc_lock(hwc_session_->command_seq_mutex_);
   bool outChanged = false;
   uint32_t outLength = 0;
   hidl_vec<hidl_handle> outHandles;
@@ -963,30 +989,37 @@ Return<Error> QtiComposerClient::setColorMode_2_3(uint64_t display, common_V1_2:
 
 Return<void> QtiComposerClient::getDisplayCapabilities(uint64_t display,
                                                        getDisplayCapabilities_cb _hidl_cb) {
-  // We only care about passing VTS for older composer versions
-  // Not returning any capabilities that are optional
+  // Report optional capabilities that we do support to pass VTS.
 
-  hidl_vec<DisplayCapability_V2_3> capabilities;
+  hidl_vec<composer_V2_3::IComposerClient::DisplayCapability> capabilities;
 
-  uint32_t count = 0;
-  auto error = hwc_session_->GetDisplayCapabilities2_3(display, &count, nullptr);
-  if (error != HWC2_ERROR_NONE) {
-    _hidl_cb(static_cast<Error>(error), capabilities);
+  std::lock_guard<std::mutex> lock(mDisplayDataMutex);
+  if (mDisplayData.find(display) == mDisplayData.end()) {
+     _hidl_cb(Error::BAD_DISPLAY, capabilities);
     return Void();
   }
 
-  capabilities.resize(count);
-  error = hwc_session_->GetDisplayCapabilities2_3(display, &count,
-                 reinterpret_cast<std::underlying_type<DisplayCapability_V2_3>::type*>(
-                 capabilities.data()));
-   if (error != HWC2_ERROR_NONE) {
-     capabilities = hidl_vec<DisplayCapability_V2_3>();
-     _hidl_cb(static_cast<Error>(error), capabilities);
-     return Void();
-   }
+  HwcDisplayConnectionType display_conn_type = HwcDisplayConnectionType::INTERNAL;
+  int32_t ret = hwc_session_->GetDisplayConnectionType(display, &display_conn_type);
 
-   _hidl_cb(static_cast<Error>(error), capabilities);
-   return Void();
+  if (HWC2_ERROR_NONE != ret) {
+     _hidl_cb(static_cast<Error>(ret), capabilities);
+    return Void();
+  }
+
+  if (HwcDisplayConnectionType::INTERNAL == display_conn_type) {
+    int32_t has_doze_support = 0;
+    hwc_session_->GetDozeSupport(display, &has_doze_support);
+    if (has_doze_support) {
+      capabilities = { composer_V2_3::IComposerClient::DisplayCapability::DOZE,
+                       composer_V2_3::IComposerClient::DisplayCapability::BRIGHTNESS };
+    } else {
+      capabilities = { composer_V2_3::IComposerClient::DisplayCapability::BRIGHTNESS };
+    }
+  }
+
+  _hidl_cb(Error::NONE, capabilities);
+  return Void();
 }
 
 Return<void> QtiComposerClient::getPerFrameMetadataKeys_2_3(uint64_t display,
@@ -1035,6 +1068,13 @@ Return<void> QtiComposerClient::getHdrCapabilities_2_3(uint64_t display,
 Return<void> QtiComposerClient::getDisplayBrightnessSupport(uint64_t display,
                                                          getDisplayBrightnessSupport_cb _hidl_cb) {
   bool support = false;
+
+  std::lock_guard<std::mutex> lock(mDisplayDataMutex);
+  if (mDisplayData.find(display) == mDisplayData.end()) {
+    _hidl_cb(Error::BAD_DISPLAY, support);
+    return Void();
+  }
+
   auto error = hwc_session_->GetDisplayBrightnessSupport(display, &support);
 
   _hidl_cb(static_cast<Error>(error), support);
@@ -1059,9 +1099,10 @@ Return<void> QtiComposerClient::registerCallback_2_4(
   enableCallback(callback != nullptr);
   return Void();
 }
+
 Return<void> QtiComposerClient::getDisplayCapabilities_2_4(uint64_t display,
                                                            getDisplayCapabilities_2_4_cb _hidl_cb) {
-  hidl_vec<composer_V2_4::IComposerClient::DisplayCapability> capabilities;
+  hidl_vec<HwcDisplayCapability> capabilities;
   auto error = hwc_session_->GetDisplayCapabilities(display, &capabilities);
   _hidl_cb(static_cast<composer_V2_4::Error>(error), capabilities);
   return Void();
@@ -1108,6 +1149,7 @@ Return<void> QtiComposerClient::setActiveConfigWithConstraints(
 }
 
 Return<composer_V2_4::Error> QtiComposerClient::setAutoLowLatencyMode(uint64_t display, bool on) {
+  std::lock_guard<std::mutex> lock(mDisplayDataMutex);
   if (mDisplayData.find(display) == mDisplayData.end()) {
     return composer_V2_4::Error::BAD_DISPLAY;
   }
@@ -1117,6 +1159,7 @@ Return<composer_V2_4::Error> QtiComposerClient::setAutoLowLatencyMode(uint64_t d
 Return<void> QtiComposerClient::getSupportedContentTypes(uint64_t display,
                                                          getSupportedContentTypes_cb _hidl_cb) {
   hidl_vec<composer_V2_4::IComposerClient::ContentType> types = {};
+  std::lock_guard<std::mutex> lock(mDisplayDataMutex);
   if (mDisplayData.find(display) == mDisplayData.end()) {
     _hidl_cb(composer_V2_4::Error::BAD_DISPLAY, types);
     return Void();
@@ -1127,6 +1170,7 @@ Return<void> QtiComposerClient::getSupportedContentTypes(uint64_t display,
 
 Return<composer_V2_4::Error> QtiComposerClient::setContentType(
     uint64_t display, composer_V2_4::IComposerClient::ContentType type) {
+  std::lock_guard<std::mutex> lock(mDisplayDataMutex);
   if (mDisplayData.find(display) == mDisplayData.end()) {
     return composer_V2_4::Error::BAD_DISPLAY;
   }
@@ -1143,6 +1187,12 @@ Return<void> QtiComposerClient::getLayerGenericMetadataKeys(
   return Void();
 }
 
+Return<Error> QtiComposerClient::tryDrawMethod(uint64_t display,
+    IQtiComposerClient::DrawMethod drawMethod) {
+  auto error = hwc_session_->TryDrawMethod(display, drawMethod);
+  return static_cast<Error>(error);
+}
+
 QtiComposerClient::CommandReader::CommandReader(QtiComposerClient& client)
   : mClient(client), mWriter(client.mWriter) {
 }
@@ -1153,14 +1203,16 @@ bool QtiComposerClient::CommandReader::parseCommonCmd(
 
   switch (command) {
   // Commands from ::android::hardware::graphics::composer::V2_1::IComposerClient follow.
-  case IComposerClient::Command::SELECT_DISPLAY:
+  case IComposerClient::Command::SELECT_DISPLAY: {
     parsed = parseSelectDisplay(length);
+    std::lock_guard<std::mutex> lock(mClient.mDisplayDataMutex);
     // Displays will not be removed while processing the command queue.
     if (parsed && mClient.mDisplayData.find(mDisplay) == mClient.mDisplayData.end()) {
       ALOGW("Command::SELECT_DISPLAY: Display %" PRId64 "not found. Dropping commands.", mDisplay);
       mDisplay = sdm::HWCCallbacks::kNumDisplays;
     }
     break;
+  }
   case IComposerClient::Command::SELECT_LAYER:
     parsed = parseSelectLayer(length);
     break;
@@ -1266,6 +1318,12 @@ Error QtiComposerClient::CommandReader::parse() {
       case IQtiComposerClient::Command::SET_DISPLAY_ELAPSE_TIME:
         parsed = parseSetDisplayElapseTime(length);
         break;
+      case IQtiComposerClient::Command::SET_CLIENT_TARGET_3_1:
+        parsed = parseSetClientTarget_3_1(length);
+        break;
+      case IQtiComposerClient::Command::SET_LAYER_FLAG_3_1:
+        parsed = parseSetLayerFlag(length);
+        break;
       default:
         parsed = parseCommonCmd(static_cast<IComposerClient::Command>(qticommand), length);
         break;
@@ -1325,7 +1383,7 @@ bool QtiComposerClient::CommandReader::parseSetColorTransform(uint16_t length) {
 
 bool QtiComposerClient::CommandReader::parseSetClientTarget(uint16_t length) {
   // 4 parameters followed by N rectangles
-  if ((length - 4) % 4 != 0) {
+  if (length < 4 || ((length - 4) % 4 != 0)) {
     return false;
   }
 
@@ -1340,6 +1398,32 @@ bool QtiComposerClient::CommandReader::parseSetClientTarget(uint16_t length) {
   auto err = lookupBuffer(BufferCache::CLIENT_TARGETS, slot, useCache, clientTarget, &clientTarget);
   if (err == Error::NONE) {
     auto error = mClient.hwc_session_->SetClientTarget(mDisplay, clientTarget, fence,
+        dataspace, region);
+    err = static_cast<Error>(error);
+    auto updateBufErr = updateBuffer(BufferCache::CLIENT_TARGETS, slot,
+        useCache, clientTarget);
+    if (err == Error::NONE) {
+      err = updateBufErr;
+    }
+  }
+  if (err != Error::NONE) {
+    mWriter.setError(getCommandLoc(), err);
+  }
+
+  return true;
+}
+
+bool QtiComposerClient::CommandReader::parseSetClientTarget_3_1(uint16_t length) {
+  bool useCache = true;
+  auto slot = read();
+  buffer_handle_t clientTarget = nullptr;
+  shared_ptr<Fence> fence = nullptr;
+  readFence(&fence, "fbt");
+  auto dataspace = readSigned();
+  hwc_region region = {};
+  auto err = lookupBuffer(BufferCache::CLIENT_TARGETS, slot, useCache, clientTarget, &clientTarget);
+  if (err == Error::NONE) {
+    auto error = mClient.hwc_session_->SetClientTarget_3_1(mDisplay, clientTarget, fence,
         dataspace, region);
     err = static_cast<Error>(error);
     auto updateBufErr = updateBuffer(BufferCache::CLIENT_TARGETS, slot,
@@ -1382,28 +1466,124 @@ bool QtiComposerClient::CommandReader::parseSetOutputBuffer(uint16_t length) {
   return true;
 }
 
-Error QtiComposerClient::CommandReader::validateDisplay(Display display,
-                                       std::vector<Layer>& changedLayers,
-                                       std::vector<IComposerClient::Composition>& compositionTypes,
-                                       uint32_t& displayRequestMask,
-                                       std::vector<Layer>& requestedLayers,
-                                       std::vector<uint32_t>& requestMasks,
-                                       IComposerClient::ClientTargetProperty& clientTargetProperty) {
+Error QtiComposerClient::CommandReader::validateDisplay() {
+  bool validate_only = true;
+  bool needsCommit = false;
   uint32_t types_count = 0;
   uint32_t reqs_count = 0;
+  shared_ptr<Fence> presentFence = nullptr;
 
-  auto err = mClient.hwc_session_->ValidateDisplay(mDisplay, &types_count, &reqs_count);
-  if (err != HWC2_ERROR_NONE && err != HWC2_ERROR_HAS_CHANGES) {
+  auto err = mClient.hwc_session_->CommitOrPrepare(mDisplay, validate_only, &presentFence,
+                                                   &types_count, &reqs_count, &needsCommit);
+  auto status = INT32(err);
+  if (status != HWC2_ERROR_NONE && status != HWC2_ERROR_HAS_CHANGES) {
     return static_cast<Error>(err);
   }
 
-  err = mClient.hwc_session_->GetChangedCompositionTypes(mDisplay, &types_count, nullptr, nullptr);
+  return postValidateDisplay(types_count, reqs_count);
+}
+
+bool QtiComposerClient::CommandReader::parseValidateDisplay(uint16_t length) {
+  if (length != CommandWriter::kValidateDisplayLength) {
+    return false;
+  }
+
+  std::vector<Layer> changedLayers;
+  std::vector<IComposerClient::Composition> compositionTypes;
+  std::vector<Layer> requestedLayers;
+  std::vector<uint32_t> requestMasks;
+
+  auto err = validateDisplay();
+
+  if (static_cast<Error>(err) != Error::NONE) {
+    mWriter.setError(getCommandLoc(), static_cast<Error>(err));
+  }
+
+  return true;
+}
+
+bool QtiComposerClient::CommandReader::parseAcceptDisplayChanges(uint16_t length) {
+  if (length != CommandWriter::kAcceptDisplayChangesLength) {
+    return false;
+  }
+
+  auto err = mClient.hwc_session_->AcceptDisplayChanges(mDisplay);
+  if (static_cast<Error>(err) != Error::NONE) {
+    mWriter.setError(getCommandLoc(), static_cast<Error>(err));
+  }
+
+  return true;
+}
+
+Error QtiComposerClient::CommandReader::presentDisplay(Display display,
+                                                  shared_ptr<Fence>* presentFence,
+                                                  std::vector<Layer>& layers,
+                                                  std::vector<shared_ptr<Fence>>& releaseFences) {
+  int32_t err = mClient.hwc_session_->PresentDisplay(display, presentFence);
   if (err != HWC2_ERROR_NONE) {
     return static_cast<Error>(err);
   }
 
+  return postPresentDisplay(presentFence);
+}
+
+bool QtiComposerClient::CommandReader::parsePresentDisplay(uint16_t length) {
+  if (length != CommandWriter::kPresentDisplayLength) {
+    return false;
+  }
+
+  shared_ptr<Fence> presentFence = nullptr;
+  std::vector<Layer> layers;
+  std::vector<shared_ptr<Fence>> fences;
+
+  auto err = presentDisplay(mDisplay, &presentFence, layers, fences);
+  if (err != Error::NONE) {
+    mWriter.setError(getCommandLoc(), err);
+  }
+
+  return true;
+}
+
+Error QtiComposerClient::CommandReader::postPresentDisplay(shared_ptr<Fence>* presentFence) {
+  uint32_t count = 0;
+  auto err = mClient.hwc_session_->GetReleaseFences(mDisplay, &count, nullptr, nullptr);
+  if (err != HWC2_ERROR_NONE) {
+    ALOGW("failed to get release fences");
+    return Error::NONE;
+  }
+
+  std::vector<Layer> layers;
+  std::vector<shared_ptr<Fence>> releaseFences;
+  layers.resize(count);
+  releaseFences.resize(count);
+  err = mClient.hwc_session_->GetReleaseFences(mDisplay, &count, layers.data(), &releaseFences);
+  if (err != HWC2_ERROR_NONE) {
+    ALOGW("failed to get release fences");
+    layers.clear();
+    releaseFences.clear();
+    return Error::NONE;
+  }
+  mWriter.setPresentFence(*presentFence);
+  mWriter.setReleaseFences(layers, releaseFences);
+
+  return Error::NONE;
+}
+
+Error QtiComposerClient::CommandReader::postValidateDisplay(uint32_t& types_count,
+                                                            uint32_t& reqs_count) {
+  std::vector<Layer> changedLayers;
+  std::vector<IComposerClient::Composition> compositionTypes;
+  std::vector<Layer> requestedLayers;
+  std::vector<uint32_t> requestMasks;
+  IComposerClient::ClientTargetProperty clientTargetProperty;
   changedLayers.resize(types_count);
   compositionTypes.resize(types_count);
+  auto err = mClient.hwc_session_->GetChangedCompositionTypes(mDisplay, &types_count,
+                                                              nullptr, nullptr);
+  if (err != HWC2_ERROR_NONE) {
+    return static_cast<Error>(err);
+  }
+
   err = mClient.hwc_session_->GetChangedCompositionTypes(mDisplay, &types_count,
                         changedLayers.data(),
                         reinterpret_cast<std::underlying_type<IComposerClient::Composition>::type*>(
@@ -1435,10 +1615,7 @@ Error QtiComposerClient::CommandReader::validateDisplay(Display display,
 
     requestedLayers.clear();
     requestMasks.clear();
-    return static_cast<Error>(err);
   }
-
-  displayRequestMask = display_reqs;
 
   err = mClient.hwc_session_->GetClientTargetProperty(mDisplay, &clientTargetProperty);
   if (err != HWC2_ERROR_NONE) {
@@ -1446,97 +1623,13 @@ Error QtiComposerClient::CommandReader::validateDisplay(Display display,
     return static_cast<Error>(err);
   }
 
-  return static_cast<Error>(err);
-}
-
-bool QtiComposerClient::CommandReader::parseValidateDisplay(uint16_t length) {
-  if (length != CommandWriter::kValidateDisplayLength) {
-    return false;
-  }
-
-  std::vector<Layer> changedLayers;
-  std::vector<IComposerClient::Composition> compositionTypes;
-  uint32_t displayRequestMask;
-  std::vector<Layer> requestedLayers;
-  std::vector<uint32_t> requestMasks;
-  IComposerClient::ClientTargetProperty clientTargetProperty;
-
-  auto err = validateDisplay(mDisplay, changedLayers, compositionTypes, displayRequestMask,
-                             requestedLayers, requestMasks, clientTargetProperty);
-
-  if (static_cast<Error>(err) == Error::NONE) {
-    mWriter.setChangedCompositionTypes(changedLayers, compositionTypes);
-    mWriter.setDisplayRequests(displayRequestMask, requestedLayers, requestMasks);
-    if (mClient.mUseCallback24_) {
-      mWriter.setClientTargetProperty(clientTargetProperty);
-    }
-  } else {
-    mWriter.setError(getCommandLoc(), static_cast<Error>(err));
-  }
-
-  return true;
-}
-
-bool QtiComposerClient::CommandReader::parseAcceptDisplayChanges(uint16_t length) {
-  if (length != CommandWriter::kAcceptDisplayChangesLength) {
-    return false;
-  }
-
-  auto err = mClient.hwc_session_->AcceptDisplayChanges(mDisplay);
-  if (static_cast<Error>(err) != Error::NONE) {
-    mWriter.setError(getCommandLoc(), static_cast<Error>(err));
-  }
-
-  return true;
-}
-
-Error QtiComposerClient::CommandReader::presentDisplay(Display display,
-                                                  shared_ptr<Fence>* presentFence,
-                                                  std::vector<Layer>& layers,
-                                                  std::vector<shared_ptr<Fence>>& releaseFences) {
-  int32_t err = mClient.hwc_session_->PresentDisplay(display, presentFence);
-  if (err != HWC2_ERROR_NONE) {
-    return static_cast<Error>(err);
-  }
-
-  uint32_t count = 0;
-  err = mClient.hwc_session_->GetReleaseFences(display, &count, nullptr, nullptr);
-  if (err != HWC2_ERROR_NONE) {
-    ALOGW("failed to get release fences");
-    return Error::NONE;
-  }
-
-  layers.resize(count);
-  releaseFences.resize(count);
-  err = mClient.hwc_session_->GetReleaseFences(display, &count, layers.data(), &releaseFences);
-  if (err != HWC2_ERROR_NONE) {
-    ALOGW("failed to get release fences");
-    layers.clear();
-    releaseFences.clear();
-    return Error::NONE;
+  mWriter.setChangedCompositionTypes(changedLayers, compositionTypes);
+  mWriter.setDisplayRequests(display_reqs, requestedLayers, requestMasks);
+  if (mClient.mUseCallback24_) {
+    mWriter.setClientTargetProperty(clientTargetProperty);
   }
 
   return static_cast<Error>(err);
-}
-
-bool QtiComposerClient::CommandReader::parsePresentDisplay(uint16_t length) {
-  if (length != CommandWriter::kPresentDisplayLength) {
-    return false;
-  }
-
-  shared_ptr<Fence> presentFence = nullptr;
-  std::vector<Layer> layers;
-  std::vector<shared_ptr<Fence>> fences;
-
-  auto err = presentDisplay(mDisplay, &presentFence, layers, fences);
-  if (err == Error::NONE) {
-    mWriter.setPresentFence(presentFence);
-    mWriter.setReleaseFences(layers, fences);
-  } else {
-    mWriter.setError(getCommandLoc(), err);
-  }
-
-  return true;
 }
 
 bool QtiComposerClient::CommandReader::parsePresentOrValidateDisplay(uint16_t length) {
@@ -1544,41 +1637,40 @@ bool QtiComposerClient::CommandReader::parsePresentOrValidateDisplay(uint16_t le
      return false;
   }
 
-  // First try to Present as is.
-  mClient.getCapabilities();
-  if (mClient.hasCapability(HWC2_CAPABILITY_SKIP_VALIDATE)) {
-    shared_ptr<Fence> presentFence = nullptr;
-    std::vector<Layer> layers;
-    std::vector<shared_ptr<Fence>> fences;
-    auto err = presentDisplay(mDisplay, &presentFence, layers, fences);
-    if (err == Error::NONE) {
+  // Handle unified commit.
+  bool needsCommit = false;
+  shared_ptr<Fence> presentFence = nullptr;
+  uint32_t typesCount = 0;
+  uint32_t reqsCount = 0;
+  bool validate_only = false;
+  auto status = mClient.hwc_session_->CommitOrPrepare(mDisplay, validate_only, &presentFence,
+                                                      &typesCount, &reqsCount, &needsCommit);
+  if (needsCommit) {
+    if (status != HWC2::Error::None && status != HWC2::Error::HasChanges) {
+      ALOGE("CommitOrPrepare failed %d", status);
+    }
+    // Implement post validation. Getcomptypes etc;
+    postValidateDisplay(typesCount, reqsCount);
+    mWriter.setPresentOrValidateResult(0);
+  } else {
+    if (status == HWC2::Error::HasChanges) {
+      // Perform post validate.
+      auto error = postValidateDisplay(typesCount, reqsCount);
+      if (error == Error::NONE) {
+        mClient.hwc_session_->AcceptDisplayChanges(mDisplay);
+      }
+      // Set result to 2.
+      mWriter.setPresentOrValidateResult(2);
+    } else if (status == HWC2::Error::None) {
+      // Set result to 1.
       mWriter.setPresentOrValidateResult(1);
-      mWriter.setPresentFence(presentFence);
-      mWriter.setReleaseFences(layers, fences);
+    } else {
+      ALOGE("CommitOrPrepare failed !needsCommit %d", status);
+      mWriter.setError(getCommandLoc(), static_cast<Error>(status));
       return true;
     }
-  }
-
-  // Present has failed. We need to fallback to validate
-  std::vector<Layer> changedLayers;
-  std::vector<IComposerClient::Composition> compositionTypes;
-  uint32_t displayRequestMask = 0x0;
-  std::vector<Layer> requestedLayers;
-  std::vector<uint32_t> requestMasks;
-  IComposerClient::ClientTargetProperty clientTargetProperty;
-
-  auto err = validateDisplay(mDisplay, changedLayers, compositionTypes, displayRequestMask,
-                             requestedLayers, requestMasks, clientTargetProperty);
-  // mResources->setDisplayMustValidateState(mDisplay, false);
-  if (err == Error::NONE) {
-    mWriter.setPresentOrValidateResult(0);
-    mWriter.setChangedCompositionTypes(changedLayers, compositionTypes);
-    mWriter.setDisplayRequests(displayRequestMask, requestedLayers, requestMasks);
-    if (mClient.mUseCallback24_) {
-      mWriter.setClientTargetProperty(clientTargetProperty);
-    }
-  } else {
-    mWriter.setError(getCommandLoc(), err);
+    // perform post present display.
+    postPresentDisplay(&presentFence);
   }
 
   return true;
@@ -1796,6 +1888,20 @@ bool QtiComposerClient::CommandReader::parseSetLayerType(uint16_t length) {
   return true;
 }
 
+bool QtiComposerClient::CommandReader::parseSetLayerFlag(uint16_t length) {
+  if (length != CommandWriter::kSetLayerFlagLength) {
+    return false;
+  }
+
+  auto err = mClient.hwc_session_->SetLayerFlag(mDisplay, mLayer,
+                                                static_cast<IQtiComposerClient::LayerFlag>(read()));
+  if (static_cast<Error>(err) != Error::NONE) {
+     mWriter.setError(getCommandLoc(), static_cast<Error>(err));
+  }
+
+  return true;
+}
+
 bool QtiComposerClient::CommandReader::parseSetLayerPerFrameMetadata(uint16_t length) {
   // (key, value) pairs
   if (length % 2 != 0) {
@@ -1862,7 +1968,7 @@ bool QtiComposerClient::CommandReader::parseSetLayerColorTransform(uint16_t leng
 bool QtiComposerClient::CommandReader::parseSetLayerPerFrameMetadataBlobs(uint16_t length) {
   // must have at least one metadata blob
   // of at least size 1 in queue (i.e {/*numBlobs=*/1, key, size, blob})
-  if (length < 4) {
+  if (length <= 4) {
     return false;
   }
 
@@ -1876,7 +1982,7 @@ bool QtiComposerClient::CommandReader::parseSetLayerPerFrameMetadataBlobs(uint16
     uint32_t blobSize = read();
     length -= 2;
 
-    if (length * sizeof(uint32_t) < blobSize) {
+    if (length * sizeof(uint32_t) < blobSize && (length % 2 != 0)) {
       return false;
     }
 
@@ -2010,15 +2116,14 @@ Error QtiComposerClient::CommandReader::lookupBufferCacheEntryLocked(BufferCache
 Error QtiComposerClient::CommandReader::lookupBuffer(BufferCache cache, uint32_t slot,
                                                      bool useCache, buffer_handle_t handle,
                                                      buffer_handle_t* outHandle) {
+  std::lock_guard<std::mutex> lock(mClient.mDisplayDataMutex);
+  BufferCacheEntry* entry;
+  Error error = lookupBufferCacheEntryLocked(cache, slot, &entry);
+  if (error != Error::NONE) {
+    return error;
+  }
+
   if (useCache) {
-    std::lock_guard<std::mutex> lock(mClient.mDisplayDataMutex);
-
-    BufferCacheEntry* entry;
-    Error error = lookupBufferCacheEntryLocked(cache, slot, &entry);
-    if (error != Error::NONE) {
-      return error;
-    }
-
     // input handle is ignored
     *outHandle = entry->getHandle();
   } else if (cache == BufferCache::LAYER_SIDEBAND_STREAMS) {

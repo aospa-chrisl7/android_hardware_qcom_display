@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017 - 2018, 2021, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017 - 2018, 2021 The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -37,11 +37,11 @@
 // that doesn't use keyword "virtual" for a variable name. Not doing so leads to the kernel version
 // of drm.h being included causing compilation to fail
 #include <drm/msm_drm.h>
-#ifdef KERNEL_5_4
-#include <drm/sde_drm.h>
-#endif
+#include <display/drm/sde_drm.h>
 #include <algorithm>
 #include <iterator>
+#include <chrono>
+#include <thread>
 
 #include "drm_master.h"
 
@@ -82,11 +82,17 @@ void DRMMaster::DestroyInstance() {
 }
 
 int DRMMaster::Init() {
-  dev_fd_ = drmOpen("msm_drm", nullptr);
-  if (dev_fd_ < 0) {
-    DRM_LOGE("drmOpen failed with error %d", dev_fd_);
-    return -ENODEV;
-  }
+  uint8_t retry = 0;
+  do {
+    dev_fd_ = drmOpen("msm_drm", nullptr);
+    if(dev_fd_ < 0) {
+      DRM_LOGW("drmOpen failed with error %d, retry %d", dev_fd_, retry);
+      if (retry >= MAX_RETRY) {
+        return -ENODEV;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  } while(dev_fd_ < 0 && retry++ < MAX_RETRY);
 
   return 0;
 }
@@ -97,6 +103,7 @@ DRMMaster::~DRMMaster() {
 }
 
 int DRMMaster::CreateFbId(const DRMBuffer &drm_buffer, uint32_t *fb_id) {
+  lock_guard<mutex> obj(s_lock);
   uint32_t gem_handle = 0;
   int ret = drmPrimeFDToHandle(dev_fd_, drm_buffer.fd, &gem_handle);
   if (ret) {
@@ -133,6 +140,7 @@ int DRMMaster::CreateFbId(const DRMBuffer &drm_buffer, uint32_t *fb_id) {
 }
 
 int DRMMaster::RemoveFbId(uint32_t fb_id) {
+  lock_guard<mutex> obj(s_lock);
   int ret = 0;
 #ifdef DRM_IOCTL_MSM_RMFB2
   ret = drmIoctl(dev_fd_, DRM_IOCTL_MSM_RMFB2, &fb_id);
@@ -140,10 +148,7 @@ int DRMMaster::RemoveFbId(uint32_t fb_id) {
     DRM_LOGE("drmIoctl::DRM_IOCTL_MSM_RMFB2 failed for fb_id %d with error %d", fb_id, errno);
   }
 #else
-  ret = drmModeRmFB(dev_fd_, fb_id);
-  if (ret) {
-    DRM_LOGE("drmModeRmFB failed for fb_id %d with error %d", fb_id, ret);
-  }
+  DRM_LOGE("drmModeRmFB is no longer used. DRM_IOCTL_MSM_RMFB2 not found");
 #endif
   return ret;
 }

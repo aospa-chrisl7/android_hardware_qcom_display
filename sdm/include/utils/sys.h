@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2015, The Linux Foundation. All rights reserved.
+* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -49,7 +49,11 @@ class Sys {
 #endif
 
   // Pointers to system calls which are either mapped to actual system call or virtual driver.
+#ifdef TRUSTED_VM
+  typedef int (*ioctl)(int, unsigned long int, ...);  // NOLINT
+#else
   typedef int (*ioctl)(int, int, ...);
+#endif
   typedef int (*access)(const char *, int);
   typedef int (*open)(const char *, int, ...);
   typedef int (*close)(int);
@@ -61,6 +65,13 @@ class Sys {
   typedef ssize_t (*read)(int, void *, size_t);
   typedef ssize_t (*write)(int, const void *, size_t);
   typedef int (*eventfd)(unsigned int, int);
+  typedef int (*inotify_init)(void);
+  typedef int (*inotify_add_watch)(int, const char *, uint32_t);
+#ifdef TRUSTED_VM
+  typedef int (*inotify_rm_watch)(int, int);
+#else
+  typedef int (*inotify_rm_watch)(int, uint32_t);
+#endif
 
   static bool getline_(fstream &fs, std::string &line);  // NOLINT
 
@@ -76,6 +87,9 @@ class Sys {
   static read read_;
   static write write_;
   static eventfd eventfd_;
+  static inotify_init inotify_init_;
+  static inotify_add_watch inotify_add_watch_;
+  static inotify_rm_watch inotify_rm_watch_;
 };
 
 class DynLib {

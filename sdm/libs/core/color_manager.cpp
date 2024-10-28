@@ -1,30 +1,66 @@
-/* Copyright (c) 2015 - 2019, The Linux Foundataion. All rights reserved.
+/* Copyright (c) 2015 - 2021, The Linux Foundation. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *     * Neither the name of The Linux Foundation nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
+ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+ * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+ * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ */
+
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
-* modification, are permitted provided that the following conditions are
-* met:
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*     * Neither the name of The Linux Foundation nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
 *
-* THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
+* * Redistributions of source code must retain the above copyright
+* notice, this list of conditions and the following disclaimer.
+*
+* * Redistributions in binary form must reproduce the above
+* copyright notice, this list of conditions and the following
+* disclaimer in the documentation and/or other materials provided
+* with the distribution.
+*
+* * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+* contributors may be used to endorse or promote products derived
+* from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
 * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
-* ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
-* BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-* CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-* SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
-* BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-* WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
-* OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*
 */
 
 #include <dlfcn.h>
@@ -42,9 +78,12 @@
 namespace sdm {
 
 DynLib ColorManagerProxy::color_lib_;
+DynLib ColorManagerProxy::stc_lib_;
 CreateColorInterface ColorManagerProxy::create_intf_ = NULL;
 DestroyColorInterface ColorManagerProxy::destroy_intf_ = NULL;
 HWResourceInfo ColorManagerProxy::hw_res_info_;
+
+GetScPostBlendInterface ColorManagerProxy::create_stc_intf_ = NULL;
 
 bool NeedsToneMap(const std::vector<Layer> &layers) {
   for (auto &layer : layers) {
@@ -88,115 +127,9 @@ DisplayError PPFeaturesConfig::RetrieveNextFeature(PPFeatureInfo **feature) {
   return ret;
 }
 
-FeatureInterface* GetPostedStartFeatureCheckIntf(HWInterface *intf, PPFeaturesConfig *config) {
-  return new ColorFeatureCheckingImpl(intf, config);
-}
-
-DisplayError STCIntfClient::Init(const std::string &panel_name) {
-  lock_guard<mutex> obj(lock_);
-  if (stc_intf_) {
-    DLOGI("stc interface is already instantiated");
-    return kErrorNone;
-  }
-
-  if (!stc_intf_lib_.Open(kStcIntfLib_)) {
-    DLOGW("STC library is not present");
-    return kErrorNotSupported;
-  }
-
-  if (!stc_intf_lib_.Sym("GetScPostBlendInterface",
-                    reinterpret_cast<void **>(&GetScPostBlendInterface))) {
-    DLOGE("GetHdrInterface symbol not found!, error = %s", dlerror());
-    stc_intf_lib_.~DynLib();
-    return kErrorNotSupported;
-  }
-
-  uint32_t major_version = 1;
-  uint32_t minor_version = 0;
-
-  stc_intf_ = GetScPostBlendInterface(major_version, minor_version);
-  if (!stc_intf_) {
-    DLOGE("Failed to get STC Interface!");
-    stc_intf_lib_.~DynLib();
-    return kErrorNotSupported;
-  }
-
-  int ret = stc_intf_->Init(panel_name);
-  if (ret) {
-    DLOGE("STC Interface init failed!, error = %d", ret);
-    stc_intf_lib_.~DynLib();
-    return kErrorNotSupported;
-  }
-
-  return kErrorNone;;
-}
-
-DisplayError STCIntfClient::DeInit() {
-  lock_guard<mutex> obj(lock_);
-  if (stc_intf_) {
-    stc_intf_->DeInit();
-  }
-  stc_intf_lib_.~DynLib();
-  return kErrorNone;
-}
-
-DisplayError STCIntfClient::SetProperty(const ScPayload &payload) {
-  lock_guard<mutex> obj(lock_);
-  int ret;
-
-  if (!stc_intf_) {
-    return kErrorNotSupported;
-  }
-  ret = stc_intf_->SetProperty(payload);
-  if (ret) {
-    DLOGE("Failed to SetProperty: %d, length = %d, ret = %d", payload.prop, payload.len, ret);
-    return kErrorNotSupported;
-  }
-
-  return kErrorNone;
-}
-
-DisplayError STCIntfClient::GetProperty(ScPayload *payload) {
-  lock_guard<mutex> obj(lock_);
-  int ret = 0;
-
-  if (!stc_intf_) {
-    return kErrorNotSupported;
-  }
-  if (!payload) {
-    DLOGE("Invalid parameters");
-    return kErrorParameters;
-  }
-
-  ret = stc_intf_->GetProperty(payload);
-  if (ret) {
-    DLOGE("Failed to GetProperty: %d, length = %d, ret = %d", payload->prop, payload->len, ret);
-    return kErrorNotSupported;
-  }
-
-  return kErrorNone;
-}
-
-DisplayError STCIntfClient::ProcessOps(const ScOps op, const ScPayload &input, ScPayload *output) {
-  lock_guard<mutex> obj(lock_);
-  int ret;
-
-  if (!stc_intf_) {
-    return kErrorNotSupported;
-  }
-  if (!output) {
-    DLOGE("Invalid parameters");
-    return kErrorParameters;
-  }
-
-  DisplayError error = kErrorNone;
-  ret = stc_intf_->ProcessOps(op, input, output);
-  if (ret) {
-    DLOGE("Failed to ProcessOps: %d, ret = %d", op, ret);
-    return kErrorNotSupported;
-  }
-
-  return error;
+FeatureInterface* GetPostedStartFeatureCheckIntf(HWInterface *intf, PPFeaturesConfig *config,
+                                                 bool dyn_switch) {
+  return new ColorFeatureCheckingImpl(intf, config, dyn_switch);
 }
 
 DisplayError ColorManagerProxy::Init(const HWResourceInfo &hw_res_info) {
@@ -216,11 +149,23 @@ DisplayError ColorManagerProxy::Init(const HWResourceInfo &hw_res_info) {
 
   hw_res_info_ = hw_res_info;
 
+  // Load Stc manager library and retrieve its entry points.
+  if (stc_lib_.Open(STCMGR_LIBRARY_NAME)) {
+    if (!stc_lib_.Sym(CREATE_STC_INTERFACE_NAME, reinterpret_cast<void **>(&create_stc_intf_))) {
+      DLOGW("Fail to retrieve = %s from %s", CREATE_STC_INTERFACE_NAME, STCMGR_LIBRARY_NAME);
+      error = kErrorResources;
+    }
+  } else {
+    DLOGW("Fail to load = %s", STCMGR_LIBRARY_NAME);
+    error = kErrorResources;
+  }
+
   return error;
 }
 
 void ColorManagerProxy::Deinit() {
   color_lib_.~DynLib();
+  stc_lib_.~DynLib();
 }
 
 ColorManagerProxy::ColorManagerProxy(int32_t id, DisplayType type, HWInterface *intf,
@@ -229,31 +174,38 @@ ColorManagerProxy::ColorManagerProxy(int32_t id, DisplayType type, HWInterface *
     : display_id_(id), device_type_(type), pp_hw_attributes_(), hw_intf_(intf),
       color_intf_(NULL), pp_features_(), feature_intf_(NULL) {
   int32_t enable_posted_start_dyn = 0;
+  bool dyn_switch = false;
   Debug::Get()->GetProperty(ENABLE_POSTED_START_DYN_PROP, &enable_posted_start_dyn);
-  if (enable_posted_start_dyn && info.mode == kModeCommand) {
-    feature_intf_ = GetPostedStartFeatureCheckIntf(intf, &pp_features_);
-    if (!feature_intf_) {
-      DLOGI("Failed to create feature interface");
-    } else {
-      DisplayError err = feature_intf_->Init();
-      if (err) {
-        DLOGE("Failed to init feature interface");
-        delete feature_intf_;
-        feature_intf_ = NULL;
+  if (info.mode == kModeCommand) {
+    switch (enable_posted_start_dyn) {
+    case kControlWithPostedStartDynSwitch:
+      dyn_switch = true;
+      [[fallthrough]];
+    case kControlPostedStart:
+      feature_intf_ = GetPostedStartFeatureCheckIntf(intf, &pp_features_, dyn_switch);
+      if (!feature_intf_) {
+        DLOGI("Failed to create feature interface");
+      } else {
+        DisplayError err = feature_intf_->Init();
+        if (err) {
+          DLOGE("Failed to init feature interface");
+          delete feature_intf_;
+          feature_intf_ = NULL;
+        }
       }
+      break;
+    default:
+      break;
     }
   }
-
-  convert_[kPbGamut] = &ColorManagerProxy::ConvertToGamut;
-  convert_[kPbIgc] = &ColorManagerProxy::ConvertToIgc;
-  convert_[kPbGC] = &ColorManagerProxy::ConvertToGc;
 }
 
 ColorManagerProxy *ColorManagerProxy::CreateColorManagerProxy(DisplayType type,
                                                               HWInterface *hw_intf,
                                                               const HWDisplayAttributes &attribute,
                                                               const HWPanelInfo &panel_info,
-                                                              DppsControlInterface *dpps_intf) {
+                                                              DppsControlInterface *dpps_intf,
+                                                              DisplayInterface *disp_intf) {
   DisplayError error = kErrorNone;
   PPFeatureVersion versions;
   int32_t display_id = -1;
@@ -262,6 +214,12 @@ ColorManagerProxy *ColorManagerProxy::CreateColorManagerProxy(DisplayType type,
   // check if all resources are available before invoking factory method from libsdm-color.so.
   if (!color_lib_ || !create_intf_ || !destroy_intf_) {
     DLOGW("Information for %s isn't available!", COLORMGR_LIBRARY_NAME);
+    return NULL;
+  }
+
+  // check if all resources are available before invoking libsnapdragoncolor-manager.so.
+  if (!stc_lib_ || !create_stc_intf_) {
+    DLOGW("Information for %s isn't available!", STCMGR_LIBRARY_NAME);
     return NULL;
   }
 
@@ -292,20 +250,37 @@ ColorManagerProxy *ColorManagerProxy::CreateColorManagerProxy(DisplayType type,
       return color_manager_proxy;
     }
 
-    color_manager_proxy->stc_intf_client_ = new STCIntfClient();
-    if (!color_manager_proxy->stc_intf_client_) {
-      DLOGW("Unable to instantiate concrete StcInterface");
+    // 3. instantiate concrete create_stc_intf_ from libsnapdragoncolor_manager.so
+    color_manager_proxy->stc_intf_ = create_stc_intf_(STC_REVISION_MAJOR, STC_REVISION_MINOR);
+    if (!color_manager_proxy->stc_intf_) {
+      DLOGW("Unable to instantiate concrete StcInterface from %s", STCMGR_LIBRARY_NAME);
+      delete color_manager_proxy;
+      color_manager_proxy = NULL;
       return color_manager_proxy;
-    }
+    } else {
+      int err = color_manager_proxy->stc_intf_->Init(hw_attr.panel_name);
+      if (err) {
+        DLOGW("Failed to init Stc interface, err %d", err);
+        delete color_manager_proxy->stc_intf_;
+        color_manager_proxy->stc_intf_ = NULL;
+      } else {
+        // pass the display interface to STC manager for digital dimming
+        ScPayload payload;
+        payload.len = sizeof(disp_intf);
+        payload.prop = snapdragoncolor::kDisplayIntf;
+        payload.payload = reinterpret_cast<uint64_t>(disp_intf);
+        int ret = color_manager_proxy->stc_intf_->SetProperty(payload);
+        if (ret) {
+          DLOGW("Failed to SetProperty, property = %d error = %d", payload.prop, ret);
+        }
+      }
 
-    error = color_manager_proxy->stc_intf_client_->Init(hw_attr.panel_name);
-    if (error != kErrorNone) {
-      DLOGW("Failed to init StcInterface");
-      delete color_manager_proxy->stc_intf_client_;
-      color_manager_proxy->stc_intf_client_ = NULL;
-      return color_manager_proxy;
+      if (color_manager_proxy->HasNativeModeSupport()) {
+        color_manager_proxy->curr_mode_.gamut = ColorPrimaries_Max;
+        color_manager_proxy->curr_mode_.gamma = Transfer_Max;
+        color_manager_proxy->curr_mode_.intent = snapdragoncolor::kNative;
+      }
     }
-    color_manager_proxy->support_stc_tonemap_ = color_manager_proxy->GetSupportStcTonemap();
   }
 
   return color_manager_proxy;
@@ -320,8 +295,10 @@ ColorManagerProxy::~ColorManagerProxy() {
     delete feature_intf_;
     feature_intf_ = NULL;
   }
-  if (stc_intf_client_) {
-    stc_intf_client_->DeInit();
+  if (stc_intf_) {
+    stc_intf_->DeInit();
+    delete stc_intf_;
+    stc_intf_ = NULL;
   }
 }
 
@@ -334,6 +311,51 @@ DisplayError ColorManagerProxy::ColorSVCRequestRoute(const PPDisplayAPIPayload &
   // feature list with paramaters being transformed into target requirement.
   ret = color_intf_->ColorSVCRequestRoute(in_payload, out_payload, &pp_features_, pending_action);
 
+  if (!stc_intf_) {
+    return ret;
+  }
+
+  if (!ret && pending_action->action == kGetNumRenderIntents) {
+    uint32_t num_render_intent = 0;
+    ScPayload payload;
+    payload.len = sizeof(num_render_intent);
+    payload.prop = snapdragoncolor::kGetNumRenderIntents;
+    payload.payload = reinterpret_cast<uint64_t>(&num_render_intent);
+    int err = stc_intf_->GetProperty(&payload);
+    if (err) {
+      DLOGE("Failed to get number of render intents, err %d", err);
+      return kErrorUndefined;
+    }
+
+    if (!out_payload) {
+      DLOGE("Out payload is NULL!");
+      return kErrorParameters;
+    }
+
+    uint32_t *size = NULL;
+    ret = out_payload->CreatePayload<uint32_t>(size);
+    if (ret || !size) {
+      DLOGE("Failed to create response payload err %d, size %p", ret, size);
+      return ret;
+    }
+
+    *size = num_render_intent;
+  } else if (!ret && pending_action->action == kGetRenderIntents) {
+    snapdragoncolor::RenderIntentMapList render_intent_map = {};
+    ScPayload payload;
+    payload.len = sizeof(render_intent_map);
+    payload.prop = snapdragoncolor::kGetRenderIntents;
+    payload.payload = reinterpret_cast<uint64_t>(&render_intent_map);
+    int err = stc_intf_->GetProperty(&payload);
+    if (err) {
+      DLOGE("Failed to get number of render intents, err %d", err);
+      return kErrorUndefined;
+    }
+
+    pending_action->action = kSetRenderIntentsData;
+    pending_action->params = reinterpret_cast<void *>(&render_intent_map);
+    ret = color_intf_->ColorSVCRequestRoute(in_payload, out_payload, &pp_features_, pending_action);
+  }
   return ret;
 }
 
@@ -349,8 +371,14 @@ DisplayError ColorManagerProxy::ApplyDefaultDisplayMode(void) {
 bool ColorManagerProxy::NeedsPartialUpdateDisable() {
   Locker &locker(pp_features_.GetLocker());
   SCOPE_LOCK(locker);
-
-  return pp_features_.IsDirty();
+  bool pu_disable = pp_features_.IsPuDisable();
+  if (pu_disable) {
+    // TODO(user): Enabling PU along with call to ReconfigureDisplay will result in
+    // unexpected reset of disable_pu_. But this is a rare case.
+    pp_features_.MarkPuEnable();
+  }
+  return (pu_disable || pp_features_.IsDirty() || needs_update_ || apply_mode_ ||
+    pp_features_.IsSwAssetDirty());
 }
 
 DisplayError ColorManagerProxy::Commit() {
@@ -362,8 +390,19 @@ DisplayError ColorManagerProxy::Commit() {
   if (feature_intf_) {
     feature_intf_->SetParams(kFeatureSwitchMode, &is_dirty);
   }
+
   if (is_dirty) {
-    ret = hw_intf_->SetPPFeatures(&pp_features_);
+    while (ret == kErrorNone) {
+      PPFeatureInfo *feature = nullptr;
+      if (pp_features_.RetrieveNextFeature(&feature) || !feature) {
+        break;
+      }
+
+      ret = hw_intf_->SetPPFeature(feature);
+    }
+
+    // Once all features were consumed, then destroy all feature instance from feature_list,
+    pp_features_.Reset();
   }
 
   return ret;
@@ -382,6 +421,7 @@ void PPHWAttributes::Set(const HWResourceInfo &hw_res,
   attributes = attr;
   version = feature_ver;
   dpps_intf = intf;
+  max_brightness = panel_info.panel_max_brightness;
 
   if (strlen(panel_info.panel_name)) {
     snprintf(&panel_name[0], sizeof(panel_name), "%s", &panel_info.panel_name[0]);
@@ -391,6 +431,37 @@ void PPHWAttributes::Set(const HWResourceInfo &hw_res,
     if ((tmp = strstr(panel_name, "\n")) != NULL)
       *tmp = '\0';
   }
+}
+
+bool ColorManagerProxy::NeedAssetsUpdate() {
+  bool need_update = false;
+  if (!stc_intf_) {
+    return need_update;
+  }
+  ScPayload payload;
+
+  payload.len = sizeof(need_update);
+  payload.prop = kNeedsUpdate;
+  payload.payload = reinterpret_cast<uint64_t>(&need_update);
+  stc_intf_->GetProperty(&payload);
+  return need_update;
+}
+
+bool ColorManagerProxy::HasNativeModeSupport() {
+  bool native_mode_support = false;
+  if (!stc_intf_) {
+    return native_mode_support;
+  }
+
+  snapdragoncolor::ColorModeList stc_color_modes = {};
+  ColorMgrGetStcModes(&stc_color_modes);
+  for (auto &iter : stc_color_modes.list) {
+    if (iter.intent == snapdragoncolor::kNative) {
+      native_mode_support = true;
+    }
+  }
+
+  return native_mode_support;
 }
 
 DisplayError ColorManagerProxy::ColorMgrGetNumOfModes(uint32_t *mode_cnt) {
@@ -412,7 +483,38 @@ DisplayError ColorManagerProxy::ColorMgrGetModeInfo(int32_t mode_id, AttrVal *qu
 
 DisplayError ColorManagerProxy::ColorMgrSetColorTransform(uint32_t length,
                                                           const double *trans_data) {
-  return color_intf_->ColorIntfSetColorTransform(&pp_features_, 0, length, trans_data);
+  if (!trans_data) {
+    DLOGE("Invalid parameters");
+    return kErrorParameters;
+  }
+
+  if (length != snapdragoncolor::kMatrixSize) {
+    DLOGE("The length of matrix is not as expected : %d, len = %d", snapdragoncolor::kMatrixSize,
+          length);
+    return kErrorParameters;
+  }
+
+  if (!stc_intf_) {
+    DLOGW("STC interface is NULL");
+    return kErrorNone;
+  }
+
+  struct snapdragoncolor::ColorTransform color_transform = {};
+  for (uint32_t i = 0; i < length; i++) {
+    color_transform.coeff_array[i] = static_cast<float>(*(trans_data + i));
+  }
+
+  ScPayload in_data = {};
+  in_data.prop = snapdragoncolor::kSetColorTransform;
+  in_data.len = sizeof(color_transform);
+  in_data.payload = reinterpret_cast<uint64_t>(&color_transform);
+  int result = stc_intf_->SetProperty(in_data);
+  if (result) {
+    DLOGE("Failed to SetProperty prop = %d, error = %d", in_data.prop, result);
+    return kErrorUndefined;
+  }
+
+  return kErrorNone;
 }
 
 DisplayError ColorManagerProxy::ColorMgrGetDefaultModeID(int32_t *mode_id) {
@@ -432,62 +534,130 @@ DisplayError ColorManagerProxy::ColorMgrSetModeWithRenderIntent(int32_t color_mo
   return kErrorNone;
 }
 
-DisplayError ColorManagerProxy::Validate(HWLayers *hw_layers) {
+DisplayError ColorManagerProxy::ColorMgrSetSprIntf(std::shared_ptr<SPRIntf> spr_intf) {
+  return color_intf_->ColorIntfSetSprInterface(spr_intf);
+}
+
+DisplayError ColorManagerProxy::Validate(DispLayerStack *disp_layer_stack) {
   DisplayError ret = kErrorNone;
-  if (!hw_layers) {
+  if (!disp_layer_stack) {
     return ret;
   }
 
-  bool updates = NeedHwassetsUpdate();
   bool valid_meta_data = false;
-  bool update_meta_data = false, update_mode_Hwassets = false;
+  bool update_meta_data = false;
   Layer hdr_layer = {};
-  bool hdr_present = false, hdr_plus_present = false;
+  bool hdr_present = false;
 
-  valid_meta_data = NeedsToneMap(hw_layers->info.hw_layers);
+  valid_meta_data = NeedsToneMap(disp_layer_stack->info.hw_layers);
   if (valid_meta_data) {
-    if (hw_layers->info.hdr_layer_info.in_hdr_mode &&
-          hw_layers->info.hdr_layer_info.operation == HWHDRLayerInfo::kSet) {
-      hdr_layer = *(hw_layers->info.stack->layers.at(
-                                 UINT32(hw_layers->info.hdr_layer_info.layer_index)));
+    if (disp_layer_stack->info.hdr_layer_info.in_hdr_mode &&
+          disp_layer_stack->info.hdr_layer_info.operation == HWHDRLayerInfo::kSet) {
+      hdr_layer = *(disp_layer_stack->stack->layers.at(
+                                 UINT32(disp_layer_stack->info.hdr_layer_info.layer_index)));
       hdr_present = true;
     }
 
-    if (hdr_present) {
-      if (hdr_layer.input_buffer.color_metadata.dynamicMetaDataValid &&
-          hdr_layer.input_buffer.color_metadata.dynamicMetaDataLen) {
-        hdr_plus_present = true;
-      }
+    if (hdr_present && hdr_layer.input_buffer.color_metadata.dynamicMetaDataValid &&
+        hdr_layer.input_buffer.color_metadata.dynamicMetaDataLen) {
+      update_meta_data = true;
+      meta_data_ = hdr_layer.input_buffer.color_metadata;
     }
   }
 
-  if (apply_mode_) {
-    update_mode_Hwassets = true;
-    apply_mode_ = false;
-  }
-
-  if (updates) {
-    update_mode_Hwassets = true;
-  }
-
-  if (hdr_present || hdr_plus_present) {
-    update_meta_data = true;
-    meta_data_ = hdr_layer.input_buffer.color_metadata;
-    update_mode_Hwassets = true;
-  }
-
-  if (update_mode_Hwassets) {
-    snapdragoncolor::ColorMode color_mode;
-    color_mode = GetColorPrimaries(cur_blend_space_, cur_intent_);
-    UpdateModeHwassets(cur_mode_id_, color_mode, update_meta_data, meta_data_);
+  if (needs_update_ || apply_mode_ || update_meta_data) {
+    UpdateModeHwassets(cur_mode_id_, curr_mode_, update_meta_data, meta_data_);
     DumpColorMetaData(meta_data_);
+    apply_mode_ = false;
+    needs_update_ = false;
   }
 
+  {
+    Locker &locker(pp_features_.GetLocker());
+    SCOPE_LOCK(locker);
+    bool dirty = pp_features_.IsSwAssetDirty();
+    if (dirty) {
+      pp_features_.ClearSwAssertDirty();
+    }
+  }
   return kErrorNone;
 }
 
-bool ColorManagerProxy::IsSupportStcTonemap() {
-  return support_stc_tonemap_;
+DisplayError ColorManagerProxy::Prepare() {
+  DisplayError ret = kErrorNone;
+
+  ret = ApplySwAssets();
+  return ret;
+}
+
+bool ColorManagerProxy::IsValidateNeeded() {
+  bool dirty = false;
+  {
+    Locker &locker(pp_features_.GetLocker());
+    SCOPE_LOCK(locker);
+    dirty = pp_features_.IsSwAssetDirty();
+  }
+
+  needs_update_ = NeedAssetsUpdate();
+  return (dirty || needs_update_ || apply_mode_);
+}
+
+DisplayError ColorManagerProxy::ApplySwAssets() {
+  DisplayError error = kErrorNone;
+
+  if (!needs_update_ && !apply_mode_) {
+    return error;
+  }
+
+  if (!stc_intf_) {
+    DLOGE("STC interface is NULL");
+    return kErrorUndefined;
+  }
+
+  ScPayload in_data = {};
+  struct ModeRenderInputParams mode_params = {};
+  mode_params.color_mode = curr_mode_;
+  in_data.prop = kModeRenderInputParams;
+  in_data.len = sizeof(mode_params);
+  in_data.payload = reinterpret_cast<uint64_t>(&mode_params);
+
+  ScPayload out_data = {};
+  struct HwConfigOutputParams sw_params = {};
+  out_data.prop = kHwConfigPayloadParam;
+  out_data.len = sizeof(sw_params);
+  out_data.payload = reinterpret_cast<uint64_t>(&sw_params);
+
+  int err = stc_intf_->ProcessOps(kScModeSwAssets, in_data, &out_data);
+  if (err) {
+    DLOGE("Failed to process kScModeSwAssets, err %d", err);
+    error = kErrorUndefined;
+  } else if (!sw_params.payload.empty()) {
+    error = ConvertToPPFeatures(sw_params, &pp_features_);
+    if (error != kErrorNone) {
+      DLOGE("Failed to update Stc SW assets, error %d", error);
+      return error;
+    }
+  }
+
+  return error;
+}
+
+DisplayError ColorManagerProxy::NotifyDisplayCalibrationMode(bool in_calibration) {
+  if (!stc_intf_) {
+    return kErrorUndefined;
+  }
+
+  ScPayload payload;
+  payload.len = sizeof(in_calibration);
+  payload.prop = kNotifyDisplayCalibrationMode;
+  payload.payload = reinterpret_cast<uint64_t>(&in_calibration);
+  int ret = stc_intf_->SetProperty(payload);
+  if (ret) {
+    DLOGE("Failed to SetProperty, property = %d error = %d", payload.prop, ret);
+    return kErrorUndefined;
+  }
+
+  return kErrorNone;
 }
 
 bool ColorManagerProxy::GameEnhanceSupported() {
@@ -500,112 +670,32 @@ bool ColorManagerProxy::GameEnhanceSupported() {
   return supported;
 }
 
-DisplayError ColorManagerProxy::ConvertToPPFeatures(HwConfigOutputParams *params,
+DisplayError ColorManagerProxy::ConvertToPPFeatures(const HwConfigOutputParams &params,
                                                     PPFeaturesConfig *out_data) {
-  if (!params || !out_data) {
+  if (!out_data) {
     DLOGE("Invalid input parameters");
     return kErrorParameters;
   }
 
-  if (params->payload.empty()) {
+  if (params.payload.empty()) {
     return kErrorNone;
   }
 
   DisplayError error = kErrorNone;
-  for (auto it = params->payload.begin(); it != params->payload.end(); it++) {
-    ConvertTable::const_iterator found = convert_.find(it->hw_asset);
-    if (found == convert_.end()) {
-      DLOGE("%s is not supported", it->hw_asset.c_str());
-      return kErrorNotSupported;
-    }
-
-    ConvertProc func = found->second;
-    error = (this->*func)(*it, out_data);
+  for (auto it = params.payload.begin(); it != params.payload.end(); it++) {
+    error = color_intf_->ColorIntfConvertFeature(UINT32(display_id_), *it, out_data);
     if (error != kErrorNone) {
-      DLOGE("Failer to convert %s, error = %d", it->hw_asset.c_str(), error);
+      DLOGE("Failed to convert %s feature to PPFeature : err %d", it->hw_asset.c_str(), error);
       return error;
     }
   }
-
   return error;
-}
-
-DisplayError ColorManagerProxy::ConvertToIgc(const HwConfigPayload &in_data,
-                                                   PPFeaturesConfig *out_data) {
-  if (in_data.hw_payload_len != sizeof(GammaPostBlendConfig)) {
-    DLOGE("Invalid parameters size = %d", in_data.hw_payload_len);
-    return kErrorParameters;
-  }
-  DisplayError ret = kErrorNone;
-  GammaPostBlendConfig *ptr = reinterpret_cast<GammaPostBlendConfig*>(in_data.hw_payload.get());
-  if (!ptr) {
-    DLOGE("Invalid parameters");
-    return kErrorUndefined;
-  }
-  ret = color_intf_->ColorIntfConvertToPPFeature(out_data, UINT32(display_id_), ptr->enabled,
-                           kPbIgc, reinterpret_cast<void *>(ptr));
-  if (ret != kErrorNone) {
-    DLOGE("Failed to convert Igc config date to PPFeture info: ret = %d", ret);
-    return ret;
-  }
-  return ret;
-}
-
-DisplayError ColorManagerProxy::ConvertToGc(const HwConfigPayload &in_data,
-                                                  PPFeaturesConfig *out_data) {
-  if (in_data.hw_payload_len != sizeof(GammaPostBlendConfig)) {
-    DLOGE("Invalid parameters size = %d", in_data.hw_payload_len);
-    return kErrorParameters;
-  }
-  DisplayError ret = kErrorNone;
-  GammaPostBlendConfig *ptr = reinterpret_cast<GammaPostBlendConfig*>(in_data.hw_payload.get());
-  ret = color_intf_->ColorIntfConvertToPPFeature(out_data, UINT32(display_id_), ptr->enabled,
-                           kPbGC, reinterpret_cast<void *>(ptr));
-  if (ret != kErrorNone) {
-    DLOGE("Failed to convert Gc config date to PPFeture info: ret = %d", ret);
-    ret = kErrorUndefined;
-    return ret;
-  }
-  return ret;
-}
-
-DisplayError ColorManagerProxy::ConvertToGamut(const HwConfigPayload &in_data,
-                                                     PPFeaturesConfig *out_data) {
-  if (in_data.hw_payload_len != sizeof(GamutConfig)) {
-    DLOGE("Invalid parameters size = %d", in_data.hw_payload_len);
-    return kErrorParameters;
-  }
-
-  DisplayError ret = kErrorNone;
-  GamutConfig *ptr = reinterpret_cast<GamutConfig*>(in_data.hw_payload.get());
-  ret = color_intf_->ColorIntfConvertToPPFeature(out_data, UINT32(display_id_), ptr->enabled,
-                           kPbGamut, reinterpret_cast<void *>(&ptr->gamut_info));
-  if (ret != kErrorNone) {
-    DLOGE("Failed to convert Gamut config date to PPFeture info: ret = %d", ret);
-    ret = kErrorUndefined;
-    return ret;
-  }
-  return ret;
-}
-
-bool ColorManagerProxy::NeedHwassetsUpdate() {
-  bool need_update = false;
-  if (!stc_intf_client_) {
-    return need_update;
-  }
-  ScPayload payload;
-
-  payload.len = sizeof(need_update);
-  payload.prop = kNeedsUpdate;
-  payload.payload = reinterpret_cast<uint64_t>(&need_update);
-  stc_intf_client_->GetProperty(&payload);
-  return need_update;
 }
 
 DisplayError ColorManagerProxy::UpdateModeHwassets(int32_t mode_id,
                                   snapdragoncolor::ColorMode color_mode, bool valid_meta_data,
                                   const ColorMetaData &meta_data) {
-  if (!stc_intf_client_) {
+  if (!stc_intf_) {
     return kErrorUndefined;
   }
 
@@ -617,22 +707,6 @@ DisplayError ColorManagerProxy::UpdateModeHwassets(int32_t mode_id,
   mode_params.color_mode = color_mode;
   mode_params.mode_id = mode_id;
 
-  struct snapdragoncolor::HwConfigPayload payload = {};
-  payload.hw_asset = kPbGamut;
-  payload.hw_payload_len = sizeof(GamutConfig);
-  payload.hw_payload = std::make_shared<GamutConfig>();
-  hw_params.payload.push_back(payload);
-
-  payload.hw_asset = kPbIgc;
-  payload.hw_payload = std::make_shared<GammaPostBlendConfig>(LUT1D_ENTRIES_SIZE);
-  payload.hw_payload_len = sizeof(GammaPostBlendConfig);
-  hw_params.payload.push_back(payload);
-
-  payload.hw_asset = kPbGC;
-  payload.hw_payload_len = sizeof(GammaPostBlendConfig);
-  payload.hw_payload = std::make_shared<GammaPostBlendConfig>(LUT3D_GC_ENTRIES_SIZE);
-  hw_params.payload.push_back(payload);
-
   ScPayload in_data = {};
   ScPayload out_data = {};
   in_data.prop = kModeRenderInputParams;
@@ -642,33 +716,19 @@ DisplayError ColorManagerProxy::UpdateModeHwassets(int32_t mode_id,
   out_data.prop = kHwConfigPayloadParam;
   out_data.len = sizeof(hw_params);
   out_data.payload = reinterpret_cast<uint64_t>(&hw_params);
-  error = stc_intf_client_->ProcessOps(kScModeRenderIntent, in_data, &out_data);
-  if (error != kErrorNone) {
-    DLOGE("Failed to call ProcessOps, error = %d", error);
-    return error;
+  int result = stc_intf_->ProcessOps(kScModeRenderIntent, in_data, &out_data);
+  if (result) {
+    DLOGE("Failed to call ProcessOps, error = %d", result);
+    return kErrorUndefined;
   }
 
-  error = ConvertToPPFeatures(&hw_params, &pp_features_);
+  error = ConvertToPPFeatures(hw_params, &pp_features_);
   if (error != kErrorNone) {
     DLOGE("Failed to convert hw assets to PP features, error = %d", error);
     return kErrorUndefined;
   }
   pp_features_.MarkAsDirty();
   return error;
-}
-
-bool ColorManagerProxy::GetSupportStcTonemap() {
-  bool support_tonemap = false;
-  if (!stc_intf_client_) {
-    return support_tonemap;
-  }
-  ScPayload payload;
-
-  payload.len = sizeof(support_tonemap);
-  payload.prop = kSupportToneMap;
-  payload.payload = reinterpret_cast<uint64_t>(&support_tonemap);
-  stc_intf_client_->GetProperty(&payload);
-  return support_tonemap;
 }
 
 void ColorManagerProxy::DumpColorMetaData(const ColorMetaData &color_metadata) {
@@ -696,21 +756,127 @@ void ColorManagerProxy::DumpColorMetaData(const ColorMetaData &color_metadata) {
            color_metadata.dynamicMetaDataLen);
 }
 
-snapdragoncolor::ColorMode ColorManagerProxy::GetColorPrimaries(
-                        const PrimariesTransfer &blend_space, uint32_t intent) {
-  snapdragoncolor::ColorMode mode = {};
+DisplayError ColorManagerProxy::ColorMgrGetStcModes(ColorModeList *mode_list) {
+  if (!stc_intf_) {
+    DLOGE("STC interface is NULL");
+    return kErrorUndefined;
+  }
 
-  mode.intent = static_cast<snapdragoncolor::RenderIntent>(intent + 1);
+  ScPayload payload;
+  payload.len = sizeof(ColorModeList);
+  payload.prop = kModeList;
+  payload.payload = reinterpret_cast<uint64_t>(mode_list);
 
-  mode.gamut = blend_space.primaries;
-  mode.gamma = blend_space.transfer;
+  int err = stc_intf_->GetProperty(&payload);
+  if (err) {
+    DLOGE("Failed to get Stc color modes, err %d", err);
+    return kErrorUndefined;
+  }
 
-  return mode;
+  return kErrorNone;
+}
+
+DisplayError ColorManagerProxy::ColorMgrSetStcMode(const ColorMode &color_mode) {
+  curr_mode_ = color_mode;
+  apply_mode_ = true;
+  return kErrorNone;
+}
+
+DisplayError ColorManagerProxy::ColorMgrSetLtmPccConfig(void* pcc_input, size_t size) {
+  if (!stc_intf_) {
+    DLOGE("STC interface is NULL");
+    return kErrorUndefined;
+  }
+
+  ScPayload in_data = {};
+  in_data.prop = snapdragoncolor::kSetLtmPccConfig;
+  if (pcc_input) {
+    in_data.payload = reinterpret_cast<uint64_t>(pcc_input);
+    in_data.len = size;
+  } else {
+    in_data.payload = reinterpret_cast<uint64_t>(nullptr);
+    in_data.len = 0;
+  }
+  int result = stc_intf_->SetProperty(in_data);
+  if (result) {
+    DLOGE("Failed to SetProperty prop = %d, error = %d", in_data.prop, result);
+    return kErrorUndefined;
+  }
+  return kErrorNone;
+}
+
+DisplayError ColorManagerProxy::ConfigureCWBDither(CwbConfig *cwb_cfg, bool free_data) {
+  DisplayError error = kErrorNone;
+
+  if (!stc_intf_ || (!cwb_cfg && !free_data)) {
+    DLOGE("Invalid stc_intf_ %pK, cwb_cfg %pK", stc_intf_, cwb_cfg);
+    return kErrorParameters;
+  }
+
+  //<<! free dither data
+  PPFrameCaptureData *frame_capture_data(pp_features_.GetFrameCaptureData());
+  if (free_data) {
+    if (frame_capture_data->input_params.dither_payload) {
+      DLOGV_IF(kTagQDCM, "free cwb dither data");
+      delete frame_capture_data->input_params.dither_payload;
+      frame_capture_data->input_params.dither_payload = nullptr;
+    }
+    frame_capture_data->input_params.dither_flags = 0x0;
+    return kErrorNone;
+  }
+  cwb_cfg->dither_info = nullptr;
+
+  //<<! Only the first frame goes to get pp-dither when multi-frames need to be captured
+  //<<! dither_flags is 0x0: dither settings from current color mode
+  //<<! dither_flags is 0x1: dither settings from QDCM PC tool
+  if (frame_capture_data->input_params.dither_flags == 0x0 &&
+      !frame_capture_data->input_params.dither_payload) {
+    snapdragoncolor::HwConfigOutputParams dither_hw_params = {};
+    ScPayload output = {};
+    output.len = sizeof(dither_hw_params);
+    output.prop = snapdragoncolor::kGetGlobalDitherHwConfig;
+    output.payload = reinterpret_cast<uint64_t>(&dither_hw_params);
+    int ret = stc_intf_->GetProperty(&output);
+    if (ret) {
+      DLOGE("Failed to get propety of global dither hw config");
+      return kErrorUndefined;
+    }
+
+    if (dither_hw_params.payload.empty()) {
+      DLOGV_IF(kTagQDCM, "No dither hardware asset found in color mode");
+      return kErrorNone;
+    }
+
+    if (dither_hw_params.payload[0].hw_asset.empty() ||
+        dither_hw_params.payload[0].hw_payload_len == 0) {
+      DLOGE("Invalid hw_asset.empty is %d, hw_payload_len %u",
+            dither_hw_params.payload[0].hw_asset.empty(),
+            dither_hw_params.payload[0].hw_payload_len);
+      return kErrorParameters;
+    }
+
+    //<<! update asset name from kPbDither to kPbCWBDither
+    //<<! convert data struct from dither_coeff_data to SDEDitherCfg
+    dither_hw_params.payload[0].hw_asset = snapdragoncolor::kPbCWBDither;
+    error = ConvertToPPFeatures(dither_hw_params, &pp_features_);
+    if (error != kErrorNone) {
+      DLOGE("Failed to convert cwb dither feature, error %d", error);
+      return error;
+    }
+  }
+
+  //<<! config the payload to hw_cwb_config
+  PPFeatureInfo *dither_payload = frame_capture_data->input_params.dither_payload;
+  if (dither_payload && (dither_payload->enable_flags_ & kOpsEnable))
+    cwb_cfg->dither_info = dither_payload;
+  DLOGV_IF(kTagQDCM, "config cwb dither data done");
+  return error;
 }
 
 ColorFeatureCheckingImpl::ColorFeatureCheckingImpl(HWInterface *hw_intf,
-                                                   PPFeaturesConfig *pp_features)
-  : hw_intf_(hw_intf), pp_features_(pp_features) {}
+                                                   PPFeaturesConfig *pp_features,
+                                                   bool dyn_switch)
+  : hw_intf_(hw_intf), pp_features_(pp_features), dyn_switch_(dyn_switch) {}
 
 DisplayError ColorFeatureCheckingImpl::Init() {
   states_.at(kFrameTriggerDefault) = new FeatureStateDefaultTrigger(this);
@@ -835,15 +1001,22 @@ void ColorFeatureCheckingImpl::CheckColorFeature(FrameTriggerMode *mode) {
     return;
   }
 
-  for (uint32_t i = 0; i < single_buffer_feature_.size(); i++) {
-    id = single_buffer_feature_[i];
-    feature = pp_features_->GetFeature(id);
-    if (feature && (feature->enable_flags_ & kOpsEnable)) {
-      *mode = kFrameTriggerDefault;
-      return;
+// Due to lack of hardware support for SB LUTDMA on older targets,
+// control path has to be switched dynamically to non posted start and
+// switch back to posted start after programming the SB LUTs.
+// This restriction can be removed for targets supporting
+// SB programming of color modules through SB LUTDMA during the blanking period.
+
+  if (dyn_switch_) {
+    for (uint32_t i = 0; i < single_buffer_feature_.size(); i++) {
+      id = single_buffer_feature_[i];
+      feature = pp_features_->GetFeature(id);
+      if (feature && (feature->enable_flags_ & kOpsEnable)) {
+        *mode = kFrameTriggerDefault;
+        return;
+      }
     }
   }
-
   *mode = kFrameTriggerPostedStart;
 }
 

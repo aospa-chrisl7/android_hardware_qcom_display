@@ -1,5 +1,7 @@
 /*
-* Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -25,12 +27,13 @@
 #ifndef __DISPLAY_PLUGGABLE_H__
 #define __DISPLAY_PLUGGABLE_H__
 
+#include <private/hw_events_interface.h>
+
 #include <map>
 #include <string>
 #include <vector>
 
 #include "display_base.h"
-#include "hw_events_interface.h"
 
 namespace sdm {
 
@@ -41,34 +44,38 @@ class DisplayPluggable : public DisplayBase, HWEventHandler {
   DisplayPluggable(int32_t display_id, DisplayEventHandler *event_handler,
                    HWInfoInterface *hw_info_intf, BufferAllocator *buffer_allocator,
                    CompManager *comp_manager);
-  virtual DisplayError Init();
-  virtual DisplayError Prepare(LayerStack *layer_stack);
-  virtual DisplayError GetRefreshRateRange(uint32_t *min_refresh_rate, uint32_t *max_refresh_rate);
-  virtual DisplayError SetRefreshRate(uint32_t refresh_rate, bool final_rate, bool idle_screen);
-  virtual bool IsUnderscanSupported();
-  virtual DisplayError InitializeColorModes();
-  virtual DisplayError SetColorMode(const std::string &color_mode);
-  virtual DisplayError GetColorModeCount(uint32_t *mode_count);
-  virtual DisplayError GetColorModes(uint32_t *mode_count, std::vector<std::string> *color_modes);
-  virtual DisplayError GetColorModeAttr(const std::string &color_mode, AttrVal *attr);
-  virtual DisplayError SetColorTransform(const uint32_t length, const double *color_transform) {
+  DisplayError Init() override;
+  DisplayError Prepare(LayerStack *layer_stack) override;
+  DisplayError GetRefreshRateRange(uint32_t *min_refresh_rate,
+                                   uint32_t *max_refresh_rate) override;
+  DisplayError SetRefreshRate(uint32_t refresh_rate, bool final_rate, bool idle_screen) override;
+  bool IsUnderscanSupported() override;
+  DisplayError InitializeColorModes() override;
+  DisplayError SetColorMode(const std::string &color_mode) override;
+  DisplayError GetColorModeCount(uint32_t *mode_count) override;
+  DisplayError GetColorModes(uint32_t *mode_count,
+                             std::vector<std::string> *color_modes) override;
+  DisplayError GetColorModeAttr(const std::string &color_mode, AttrVal *attr) override;
+  DisplayError SetColorTransform(const uint32_t length,
+                                 const double *color_transform) override {
     return kErrorNone;
   }
-  virtual DisplayError TeardownConcurrentWriteback(void) { return kErrorNotSupported; }
-  virtual DisplayError colorSamplingOn();
-  virtual DisplayError colorSamplingOff();
+  DisplayError colorSamplingOn() override;
+  DisplayError colorSamplingOff() override;
 
   // Implement the HWEventHandlers
-  virtual DisplayError VSync(int64_t timestamp);
-  virtual DisplayError Blank(bool blank) { return kErrorNone; }
-  virtual void IdleTimeout() {}
-  virtual void ThermalEvent(int64_t thermal_level) {}
-  virtual void CECMessage(char *message);
-  virtual void IdlePowerCollapse() {}
-  virtual void PingPongTimeout() {}
-  virtual void PanelDead() {}
-  virtual void HwRecovery(const HWRecoveryEvent sdm_event_code);
+  DisplayError VSync(int64_t timestamp) override;
+  DisplayError Blank(bool blank) override { return kErrorNone; }
+  void CECMessage(char *message) override;
+  void IdlePowerCollapse() override {}
+  void PingPongTimeout() override {}
+  void PanelDead() override {}
+  void HwRecovery(const HWRecoveryEvent sdm_event_code) override;
+  void HandleBacklightEvent(float brightness_level) override;
   void Histogram(int histogram_fd, uint32_t blob_id) override;
+  void MMRMEvent(uint32_t clk) override;
+  void HandlePowerEvent() override;
+  void HandleVmReleaseEvent() override;
 
   void UpdateColorModes();
   void InitializeColorModesFromColorspace();
@@ -81,8 +88,7 @@ class DisplayPluggable : public DisplayBase, HWEventHandler {
 
   bool underscan_supported_ = false;
   HWScanSupport scan_support_;
-  std::vector<HWEvent> event_list_ = {HWEvent::VSYNC, HWEvent::IDLE_NOTIFY, HWEvent::EXIT,
-                                      HWEvent::CEC_READ_MESSAGE, HWEvent::HW_RECOVERY};
+  std::vector<HWEvent> event_list_;
   uint32_t current_refresh_rate_ = 0;
 };
 

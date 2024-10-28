@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010 The Android Open Source Project
- * Copyright (C) 2012-2014, 2016-2019, 2021, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2012-2014, 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Not a Contribution, Apache license notifications and license are
  * retained for attribution purposes only.
@@ -76,8 +76,8 @@ public:
     DECLARE_META_INTERFACE(QService);
     enum {
       COMMAND_LIST_START = android::IBinder::FIRST_CALL_TRANSACTION,
-      GET_PANEL_BRIGHTNESS = 2,                // Provides ability to set the panel brightness
-      SET_PANEL_BRIGHTNESS = 3,                // Provides ability to get the panel brightness
+      GET_PANEL_BRIGHTNESS = 2,                // Provides ability to get the panel brightness
+      SET_PANEL_BRIGHTNESS = 3,                // Provides ability to set the panel brightness
       CONNECT_HWC_CLIENT = 4,                  // Connect to qservice
       SCREEN_REFRESH = 5,                      // Refresh screen through SF invalidate
       GET_DISPLAY_VISIBLE_REGION = 11,         // Get the visibleRegion for dpy
@@ -115,9 +115,17 @@ public:
       SET_PANEL_LUMINANCE = 47,                // Set Panel Luminance attributes.
       SET_BRIGHTNESS_SCALE = 48,               // Set brightness scale ratio
       SET_COLOR_SAMPLING_ENABLED = 49,         // Toggle the collection of display color stats
-      SET_STAND_BY_MODE = 50,                  // Set stand by mode for MDP hardware
-      GET_PANEL_RESOLUTION = 51,               // Get Panel Resolution
-      DELAY_FIRST_COMMIT = 52,                 // Delay first commit when PowerOn
+      SET_VSYNC_STATE = 50,                    // Enable/disable Vsync
+      NOTIFY_TUI_TRANSITION = 51,              // Notify TUI transition prepare/start/stop
+      GET_DISPLAY_PORT_ID = 52,                // Get the port id for a given display
+      SET_NOISE_PLUGIN_OVERRIDE = 53,          // Override NoisePlugIn parameters
+      SET_DIMMING_ENABLE = 54,                 // Set display dimming enablement
+      SET_DIMMING_MIN_BL = 55,                 // Set display dimming minimal backlight value
+      DUMP_CODE_COVERAGE = 56,                 // Dump the code coverage data for userspace projects
+      UPDATE_TRANSFER_TIME = 57,               // Update transfer time
+      SET_JITTER_CONFIG = 58,                  // Watchdog TE Jitter Configuration
+      RETRIEVE_DEMURATN_FILES = 59,            // Retrieve DemuraTn files from TVM
+      SET_DEMURA_STATE = 60,                   // Enable/disable demura feature
       COMMAND_LIST_END = 400,
     };
 
@@ -138,7 +146,8 @@ public:
         DEBUG_SCALAR,
         DEBUG_CLIENT,
         DEBUG_DISPLAY,
-        DEBUG_MAX_VAL = DEBUG_DISPLAY, // Used to check each bit of the debug command paramater.
+        DEBUG_IWE,
+        DEBUG_MAX_VAL = DEBUG_IWE, // Used to check each bit of the debug command paramater.
         // Update DEBUG_MAX_VAL when adding new debug tag.
     };
 
@@ -152,6 +161,12 @@ public:
         QSYNC_MODE_NONE,
         QSYNC_MODE_CONTINUOUS,
         QSYNC_MODE_ONESHOT,    // Not supported
+    };
+
+    enum {
+        TUI_TRANSITION_PREPARE,
+        TUI_TRANSITION_START,
+        TUI_TRANSITION_END,
     };
 
     // Register a HWC client that can be notified

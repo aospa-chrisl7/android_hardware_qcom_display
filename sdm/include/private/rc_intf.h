@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -31,10 +31,11 @@
 #define __RC_INTF_H__
 
 #include <core/display_interface.h>
-#include <string>
 
-#include "generic_intf.h"
-#include "generic_payload.h"
+#include <private/generic_intf.h>
+#include <private/generic_payload.h>
+
+#include <string>
 
 namespace sdm {
 
@@ -44,6 +45,10 @@ struct RCInputConfig {
   uint32_t display_xres = 0;
   uint32_t display_yres = 0;
   uint32_t max_mem_size = 0;
+  uint32_t mixer_width = 0;
+  uint32_t mixer_height = 0;
+  uint32_t fb_width = 0;
+  uint32_t fb_height = 0;
 };
 
 struct RCOutputConfig {
@@ -79,12 +84,17 @@ enum RCFeatureParams {
   kRCFeatureDisplayYRes,
   kRCFeatureResetHW,
   kRCFeatureQueryDspp,
+  kRCFeatureMixerWidth,
+  kRCFeatureMixerHeight,
+  kRCFeatureFbWidth,
+  kRCFeatureFbHeight,
   kRCFeatureParamMax,
 };
 
 // RC specific ops as enum
 enum RCFeatureOps {
   kRCFeaturePrepare,
+  kRCFeaturePostPrepare,
   kRCFeatureCommit,
   kRCFeatureOpsMax,
 };

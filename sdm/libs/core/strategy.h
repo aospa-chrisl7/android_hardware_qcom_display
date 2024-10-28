@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014 - 2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014 - 2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -43,9 +43,11 @@ class Strategy {
   DisplayError Init();
   DisplayError Deinit();
 
-  DisplayError Start(HWLayersInfo *hw_layers_info, uint32_t *max_attempts);
-  DisplayError GetNextStrategy(StrategyConstraints *constraints);
+  DisplayError Start(DispLayerStack *disp_layer_stack, uint32_t *max_attempts,
+                      StrategyConstraints *constraints);
+  DisplayError GetNextStrategy();
   DisplayError Stop();
+  DisplayError SetDrawMethod(const DisplayDrawMethod &draw_method);
   DisplayError Reconfigure(const HWPanelInfo &hw_panel_info,
                            const HWDisplayAttributes &hw_display_attributes,
                            const HWMixerAttributes &mixer_attributes,
@@ -55,9 +57,7 @@ class Strategy {
   DisplayError SetIdleTimeoutMs(uint32_t active_ms, uint32_t inactive_ms);
   DisplayError SetColorModesInfo(const std::vector<PrimariesTransfer> &colormodes_cs);
   DisplayError SetBlendSpace(const PrimariesTransfer &blend_space);
-  bool CanSkipValidate(bool *needs_buffer_swap);
-  void GenerateROI(HWLayersInfo *hw_layers_info, const PUConstraints &pu_constraints);
-  DisplayError SwapBuffers();
+  void GenerateROI(DispLayerStack *disp_layer_stack, const PUConstraints &pu_constraints);
 
  private:
   void GenerateROI();
@@ -69,7 +69,7 @@ class Strategy {
   DisplayType display_type_;
   HWResourceInfo hw_resource_info_;
   HWPanelInfo hw_panel_info_;
-  HWLayersInfo *hw_layers_info_ = NULL;
+  DispLayerStack *disp_layer_stack_ = NULL;
   HWMixerAttributes mixer_attributes_ = {};
   HWDisplayAttributes display_attributes_ = {};
   DisplayConfigVariableInfo fb_config_ = {};

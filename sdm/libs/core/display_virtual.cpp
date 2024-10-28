@@ -1,5 +1,7 @@
 /*
-* Copyright (c) 2014 - 2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014 - 2021, The Linux Foundation. All rights reserved.
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -24,10 +26,10 @@
 
 #include <utils/constants.h>
 #include <utils/debug.h>
+#include <private/hw_interface.h>
+#include <private/hw_info_interface.h>
 #include <algorithm>
 #include "display_virtual.h"
-#include "hw_interface.h"
-#include "hw_info_interface.h"
 
 #define __CLASS__ "DisplayVirtual"
 
@@ -47,7 +49,7 @@ DisplayVirtual::DisplayVirtual(int32_t display_id, DisplayEventHandler *event_ha
 }
 
 DisplayError DisplayVirtual::Init() {
-  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  ClientLock lock(disp_mutex_);
 
   DisplayError error = HWInterface::Create(display_id_, kVirtual, hw_info_intf_,
                                            buffer_allocator_, &hw_intf_);
@@ -75,25 +77,25 @@ DisplayError DisplayVirtual::Init() {
 }
 
 DisplayError DisplayVirtual::GetNumVariableInfoConfigs(uint32_t *count) {
-  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  ClientLock lock(disp_mutex_);
   *count = 1;
   return kErrorNone;
 }
 
 DisplayError DisplayVirtual::GetConfig(uint32_t index, DisplayConfigVariableInfo *variable_info) {
-  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  ClientLock lock(disp_mutex_);
   *variable_info = display_attributes_;
   return kErrorNone;
 }
 
 DisplayError DisplayVirtual::GetActiveConfig(uint32_t *index) {
-  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  ClientLock lock(disp_mutex_);
   *index = 0;
   return kErrorNone;
 }
 
 DisplayError DisplayVirtual::SetActiveConfig(DisplayConfigVariableInfo *variable_info) {
-  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  ClientLock lock(disp_mutex_);
 
   if (!variable_info) {
     return kErrorParameters;
@@ -118,13 +120,16 @@ DisplayError DisplayVirtual::SetActiveConfig(DisplayConfigVariableInfo *variable
     return error;
   }
 
+  uint32_t active_index = 0;
+  hw_intf_->GetActiveConfig(&active_index);
+  hw_intf_->GetDisplayAttributes(active_index, &display_attributes);
   hw_intf_->GetHWPanelInfo(&hw_panel_info);
 
   if (set_max_lum_ != -1.0 || set_min_lum_ != -1.0) {
     hw_panel_info.peak_luminance = set_max_lum_;
     hw_panel_info.blackness_level = set_min_lum_;
-    DLOGI("set peak_luminance %f blackness_level %f", hw_panel_info.peak_luminance,
-          hw_panel_info.blackness_level);
+    DLOGI("set peak_luminance %f blackness_level %f for display %d-%d", display_id_,
+          display_type_, hw_panel_info.peak_luminance, hw_panel_info.blackness_level);
   }
 
   error = hw_intf_->GetMixerAttributes(&mixer_attributes);
@@ -141,39 +146,48 @@ DisplayError DisplayVirtual::SetActiveConfig(DisplayConfigVariableInfo *variable
   if (!display_comp_ctx_) {
     error = comp_manager_->RegisterDisplay(display_id_, display_type_, display_attributes,
                                            hw_panel_info, mixer_attributes, fb_config,
-                                           &display_comp_ctx_, &(default_clock_hz_));
+                                           &display_comp_ctx_, &cached_qos_data_, this);
   } else {
     error = comp_manager_->ReconfigureDisplay(display_comp_ctx_, display_attributes, hw_panel_info,
                                               mixer_attributes, fb_config,
-                                              &(default_clock_hz_));
+                                              &cached_qos_data_);
   }
   if (error != kErrorNone) {
     return error;
   }
-  cached_qos_data_.clock_hz = default_clock_hz_;
+  default_clock_hz_ = cached_qos_data_.clock_hz;
 
   display_attributes_ = display_attributes;
   mixer_attributes_ = mixer_attributes;
   hw_panel_info_ = hw_panel_info;
   fb_config_ = fb_config;
 
-  DLOGI("Virtual display resolution changed to[%dx%d]", display_attributes_.x_pixels,
-        display_attributes_.y_pixels);
+  DLOGI("Virtual display %d-%d resolution changed to [%dx%d]", display_id_,
+        display_type_, display_attributes_.x_pixels, display_attributes_.y_pixels);
 
   return kErrorNone;
 }
 
 DisplayError DisplayVirtual::Prepare(LayerStack *layer_stack) {
-  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  ClientLock lock(disp_mutex_);
 
-  // Clean hw layers for reuse.
-  hw_layers_ = HWLayers();
+  DisplayError error = PrePrepare(layer_stack);
+  if (error == kErrorNone) {
+    return error;
+  }
+
+  if (error == kErrorNeedsLutRegen && (ForceToneMapUpdate(layer_stack) == kErrorNone)) {
+    return kErrorNone;
+  }
+
+  // Clean display layer stack for reuse.
+  disp_layer_stack_ = DispLayerStack();
 
   return DisplayBase::Prepare(layer_stack);
 }
 
 DisplayError DisplayVirtual::GetColorModeCount(uint32_t *mode_count) {
-  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  ClientLock lock(disp_mutex_);
 
   // Color Manager isn't supported for virtual displays.
   *mode_count = 1;

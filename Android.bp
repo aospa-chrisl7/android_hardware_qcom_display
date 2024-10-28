@@ -1,10 +1,3 @@
-soong_namespace {
-    imports: [
-        "hardware/qcom/display/gralloc",
-        "hardware/qcom/display/libdebug",
-    ]
-}
-
 soong_config_module_type {
     name: "qtidisplay_cc_defaults",
     module_type: "cc_defaults",
@@ -14,21 +7,79 @@ soong_config_module_type {
         "headless",
         "llvmsa",
         "gralloc4",
-        "udfps",
-        "ycrcb_camera_encode",
-        "no_raw10_custom_format",
+        "default",
+        "var3",
+        "llvmcov",
+        "panel_dimension_extra_precision",
+        "use_ycrcb_camera_encode",
     ],
     properties: [
         "cflags",
+        "enabled",
         "srcs",
+        "header_libs",
+        "host_ldlibs",
+        "ldflags",
+        "native_coverage",
+	"vendor",
     ],
 }
+
+soong_config_module_type {
+	name: "qtidisplay_prebuilt_defaults",
+	module_type: "cc_defaults",
+	config_namespace: "qtidisplay",
+	bool_variables: [
+		"var1",
+		"var2",
+		"var3",
+	],
+	properties: [
+		"enabled",
+	],
+}
+
+qtidisplay_prebuilt_defaults {
+	name: "qtidisplay_prebuilt_var1_defaults",
+	soong_config_variables: {
+		var1 : {
+			enabled: true,
+			conditions_default: {
+				enabled: false,
+			},
+		},
+	},
+}
+
+qtidisplay_prebuilt_defaults {
+	name: "qtidisplay_prebuilt_var2_defaults",
+	soong_config_variables: {
+		var2 : {
+			enabled: true,
+			conditions_default: {
+				enabled: false,
+			},
+		},
+	},
+}
+
+qtidisplay_prebuilt_defaults {
+	name: "qtidisplay_prebuilt_var3_defaults",
+	soong_config_variables: {
+		var3 : {
+			enabled: true,
+			conditions_default: {
+				enabled: false,
+			},
+		},
+	},
+}
+
 
 qtidisplay_cc_defaults {
     name: "qtidisplay_common_defaults",
     cflags: [
         "-Wno-missing-field-initializers",
-        "-Wconversion",
         "-Wall",
         "-Werror",
     ],
@@ -42,7 +93,7 @@ qtidisplay_cc_defaults {
             cflags: ["-DPP_DRM_ENABLE"],
         },
         headless: {
-            cflags: ["-DTARGET_HEADLESS"],
+            cflags: ["-DTARGET_HEADLESS", "-DQMAA"],
         },
         llvmsa: {
             cflags: [
@@ -53,14 +104,17 @@ qtidisplay_cc_defaults {
         gralloc4: {
             cflags: ["-DTARGET_USES_GRALLOC4"],
         },
-        udfps: {
-            cflags: ["-DUDFPS_ZPOS"],
+        var3 : {
+            enabled: false,
+            conditions_default: {
+                enabled: true,
+            },
         },
-        ycrcb_camera_encode: {
-            cflags: ["-DUSE_YCRCB_CAMERA_ENCODE"],
+        panel_dimension_extra_precision: {
+            cflags: ["-DTARGET_PANEL_DIMENSION_HAS_EXTRA_PRECISION"],
         },
-        no_raw10_custom_format: {
-            cflags: ["-DNO_RAW10_CUSTOM_FORMAT"],
+        use_ycrcb_camera_encode: {
+            cflags: ["-DTARGET_USE_YCRCB_CAMERA_ENCODE"],
         },
     },
 }
@@ -68,13 +122,97 @@ qtidisplay_cc_defaults {
 qtidisplay_cc_defaults {
     name: "qtidisplay_defaults",
     defaults: ["qtidisplay_common_defaults"],
-    header_libs: ["display_headers"],
+    soong_config_variables: {
+        default: {
+            header_libs: ["display_headers", "qti_kernel_headers"],
+        },
+        headless: {
+            header_libs: ["display_headers"],
+            enabled: false,
+            conditions_default: {
+                enabled: true,
+            },
+        },
+        llvmcov: {
+            cflags: [
+                "-Wl",
+                "-fprofile-instr-generate",
+                "-fcoverage-mapping",
+                "-fprofile-instr-append-file",
+                "-DPROFILE_COVERAGE_DATA",
+            ],
+
+            ldflags: [
+                "-fcoverage-mapping",
+                " -fprofile-instr-generate",
+                "-fuse-ld=lld",
+                "-gline-tables-only",
+                "-fdebug-info-for-profiling",
+            ],
+            vendor: true,
+            host_ldlibs: ["-lgcov"],
+            native_coverage: true,
+        },
+    },
+}
+
+qtidisplay_cc_defaults {
+    name: "qtidisplay_alloc_defaults",
+    defaults: ["qtidisplay_common_defaults"],
+    soong_config_variables: {
+        llvmcov: {
+            cflags: [
+                "-Wl",
+                "-fprofile-instr-generate",
+                "-fcoverage-mapping",
+                "-fprofile-instr-append-file",
+                "-DPROFILE_COVERAGE_DATA"
+            ],
+
+            ldflags: [
+                "-fcoverage-mapping",
+                " -fprofile-instr-generate",
+                "-fuse-ld=lld",
+                "-gline-tables-only",
+                "-fdebug-info-for-profiling",
+            ],
+            vendor: true,
+            host_ldlibs: ["-lgcov"],
+            native_coverage: true,
+        },
+    },
 }
 
 qtidisplay_cc_defaults {
     name: "qti_qmaa_display_defaults",
     defaults: ["qtidisplay_common_defaults"],
     header_libs: ["qmaa_display_headers"],
+}
+
+qtidisplay_cc_defaults {
+    name: "qtidisplay_coverage_defaults",
+    soong_config_variables: {
+        llvmcov: {
+            cflags: [
+                "-Wl",
+                "-fprofile-instr-generate",
+                "-fcoverage-mapping",
+                "-fprofile-instr-append-file",
+                "-DPROFILE_COVERAGE_DATA"
+            ],
+
+            ldflags: [
+                "-fcoverage-mapping",
+                " -fprofile-instr-generate",
+                "-fuse-ld=lld",
+                "-gline-tables-only",
+                "-fdebug-info-for-profiling",
+            ],
+            vendor: true,
+            host_ldlibs: ["-lgcov"],
+            native_coverage: true,
+        },
+    },
 }
 
 cc_library_headers {
@@ -90,7 +228,6 @@ cc_library_headers {
     vendor: true,
     export_include_dirs: [
         "include",
-        "libcopybit",
         "libdrmutils",
         "libqdutils",
         "libqservice",
@@ -131,7 +268,6 @@ subdirs = [
     "libqdutils",
     "libddebug",
     "libdrmutils",
-    "libmemtrack",
     "libhistogram",
     "liblight",
     "composer",
@@ -142,4 +278,5 @@ subdirs = [
     "sdm/libs/utils",
     "sdm/libs/core",
     "qmaa",
+    "oem_services",
 ]

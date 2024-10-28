@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014 - 2016, 2018 - 2019 The Linux Foundation. All rights reserved.
+* Copyright (c) 2014 - 2016, 2018 - 2021 The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -27,6 +27,13 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
+*/
+
 /*! @file core_interface.h
   @brief Interface file for core of the display subsystem.
 
@@ -37,15 +44,18 @@
 #ifndef __CORE_INTERFACE_H__
 #define __CORE_INTERFACE_H__
 
+#include <core/ipc_interface.h>
 #include <stdint.h>
 #include <map>
 #include <vector>
+#include <memory>
 
 #include "display_interface.h"
 #include "sdm_types.h"
 #include "buffer_allocator.h"
 #include "buffer_sync_handler.h"
 #include "socket_handler.h"
+#include "ipc_interface.h"
 
 /*! @brief Display manager interface version.
 
@@ -108,6 +118,8 @@ struct HWDisplayInfo {
   bool is_primary = false;                     //!< True only if this is the main display of the
                                                //!< device.
   bool is_wb_ubwc_supported = true;            //!< check hardware wb ubwc support
+  bool is_reserved = false;                    //!< check if currently reserved by any display
+  uint32_t max_linewidth = 0;                  //!< max width supported by connector
 };
 
 /*! @brief Information on all displays as a map with display_id as key.
@@ -137,6 +149,7 @@ class CoreInterface {
     @param[in] buffer_allocator \link BufferAllocator \endlink
     @param[in] buffer_sync_handler \link BufferSyncHandler \endlink
     @param[in] socket_handler \link SocketHandler \endlink
+    @param[in] ipc_intf \link IPCIntf \endlink
     @param[out] interface \link CoreInterface \endlink
     @param[in] version \link SDM_VERSION_TAG \endlink. Client must not override this argument.
 
@@ -146,7 +159,9 @@ class CoreInterface {
   */
   static DisplayError CreateCore(BufferAllocator *buffer_allocator,
                                  BufferSyncHandler *buffer_sync_handler,
-                                 SocketHandler *socket_handler, CoreInterface **interface,
+                                 SocketHandler *socket_handler,
+                                 std::shared_ptr<IPCIntf> ipc_intf,
+                                 CoreInterface **interface,
                                  uint32_t version = SDM_VERSION_TAG);
 
   /*! @brief Method to release handle to display core interface.
@@ -198,6 +213,20 @@ class CoreInterface {
   virtual DisplayError CreateDisplay(int32_t display_id, DisplayEventHandler *event_handler,
                                      DisplayInterface **interface) = 0;
 
+  /*! @brief Method to create a null display.
+
+    @details Client shall use this method to create a DisplayInterface to DisplayNull. A handle
+    to the DisplayInterface is returned via the 'interface' output parameter which can be used to
+    interact further with the display device.
+
+    @param[out] interface \link DisplayInterface \endlink
+
+    @return \link DisplayError \endlink
+
+    @sa DestroyNullDisplay
+  */
+  virtual DisplayError CreateNullDisplay(DisplayInterface **interface) = 0;
+
   /*! @brief Method to destroy a display device.
 
     @details Client shall use this method to destroy each of the created display device objects.
@@ -210,6 +239,25 @@ class CoreInterface {
   */
   virtual DisplayError DestroyDisplay(DisplayInterface *interface) = 0;
 
+  /*! @brief Method to destroy a null display device.
+
+    @details Client shall use this method to destroy null display device objects.
+
+    @param[in] interface \link DisplayInterface \endlink
+
+    @return \link DisplayError \endlink
+
+    @sa CreateNullDisplay
+  */
+  virtual DisplayError DestroyNullDisplay(DisplayInterface *interface) = 0;
+
+#ifdef PROFILE_COVERAGE_DATA
+  /*! @brief Method to destroy a display device.
+
+  */
+  virtual DisplayError DumpCodeCoverage() = 0;
+#endif
+
   /*! @brief Method to update the bandwidth limit as per given mode.
 
     @param[in] mode indicate the mode or use case
@@ -217,6 +265,12 @@ class CoreInterface {
     @return \link DisplayError \endlink
   */
   virtual DisplayError SetMaxBandwidthMode(HWBwModes mode) = 0;
+
+  /*! @brief Method to set camera launch hint.
+
+    @return \link DisplayError \endlink
+  */
+  virtual DisplayError SetCameraLaunchHint() = 0;
 
   /*! @brief Method to get characteristics of the first display.
 
@@ -265,6 +319,12 @@ class CoreInterface {
     @return returns true if the given format is supported by rotator otherwise false
   */
   virtual bool IsRotatorSupportedFormat(LayerBufferFormat format) = 0;
+
+  /*! @brief Method to reserve the resources for demura at bootup.
+
+    @return returns true if resources are successfully reserved.
+  */
+  virtual DisplayError ReserveDemuraResources() = 0;
 
  protected:
   virtual ~CoreInterface() { }

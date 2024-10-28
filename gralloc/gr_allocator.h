@@ -1,6 +1,8 @@
 /*
- * Copyright (c) 2011-2018, 2020, The Linux Foundation. All rights reserved.
-
+ * Copyright (c) 2011-2018, 2020 The Linux Foundation. All rights reserved.
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
  * met:
@@ -33,17 +35,13 @@
 #include <vector>
 
 #include "gr_buf_descriptor.h"
-#include "gr_ion_alloc.h"
 #include "gr_utils.h"
-#include "gralloc_priv.h"
+#include "gr_alloc_interface.h"
 
 namespace gralloc {
 
 class Allocator {
  public:
-  Allocator();
-  ~Allocator();
-  bool Init();
   void SetProperties(gralloc::GrallocProperties props);
   int MapBuffer(void **base, unsigned int size, unsigned int offset, int fd);
   int ImportBuffer(int fd);
@@ -54,12 +52,8 @@ class Allocator {
   bool CheckForBufferSharing(uint32_t num_descriptors,
                              const std::vector<std::shared_ptr<BufferDescriptor>> &descriptors,
                              ssize_t *max_index);
+  int SetBufferPermission(int fd, BufferPermission *buffer_perm, int64_t *mem_hdl);
  private:
-  void GetIonHeapInfo(uint64_t usage, unsigned int *ion_heap_id, unsigned int *alloc_type,
-                      unsigned int *ion_flags);
-
-  IonAlloc *ion_allocator_ = NULL;
-
   bool use_system_heap_for_sensors_ = true;
 };
 

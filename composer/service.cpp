@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2019, 2021 The Linux Foundation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -26,45 +26,98 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#include <hidl/LegacySupport.h>
-#include "QtiComposer.h"
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
+#include <android-base/logging.h>
+#include <android/binder_manager.h>
+#include <android/binder_process.h>
+#include <hidl/LegacySupport.h>
+
+#include "DisplayConfigAIDL.h"
+#include "QtiComposer.h"
+#include "hwc_debugger.h"
+
+using aidl::vendor::qti::hardware::display::config::DisplayConfigAIDL;
 using android::ProcessState;
 using android::sp;
 using android::hardware::configureRpcThreadpool;
 using android::hardware::joinRpcThreadpool;
 using android::hardware::graphics::composer::V2_3::IComposer;
-using vendor::qti::hardware::display::composer::V3_0::IQtiComposer;
-using vendor::qti::hardware::display::composer::V3_0::implementation::QtiComposer;
+using vendor::qti::hardware::display::composer::V3_1::IQtiComposer;
+using vendor::qti::hardware::display::composer::V3_1::implementation::QtiComposer;
 
 int main(int, char **) {
+  ALOGI("Creating Display HW Composer HAL");
+
+  int composer_thread_count = 8;
+  sdm::HWCDebugHandler::Get()->GetProperty(COMPOSER_THREAD_COUNT, &composer_thread_count);
+  if (composer_thread_count < 4) {
+    composer_thread_count = 4;
+  } else if (composer_thread_count > 15) {
+    composer_thread_count = 15;
+  }
+  ALOGI("composer_thread_count: %d", composer_thread_count);
+
   // TODO(user): double-check for SCHED_FIFO logic
   // the conventional HAL might start binder services
   ProcessState::initWithDriver("/dev/vndbinder");
   sp<ProcessState> ps(ProcessState::self());
-  ps->setThreadPoolMaxThreadCount(4);
+  ps->setThreadPoolMaxThreadCount(composer_thread_count);
   ps->startThreadPool();
+  ALOGI("ProcessState initialization completed");
 
   // same as SF main thread
   struct sched_param param = {0};
   param.sched_priority = 2;
   if (sched_setscheduler(0, SCHED_FIFO | SCHED_RESET_ON_FORK, &param) != 0) {
     ALOGE("Couldn't set SCHED_FIFO: %d", errno);
+  } else {
+    ALOGI("Scheduler priority settings completed");
   }
 
+  ALOGI("Initializing QtiComposer");
   sp<IQtiComposer> composer = QtiComposer::initialize();
   if (composer == nullptr) {
-    ALOGE("Cannot initialize composer");
+    ALOGE("Initializing QtiComposer...failed!");
     return -EINVAL;
+  } else {
+    ALOGI("Initializing QtiComposer...done!");
   }
 
-  configureRpcThreadpool(4, true /*callerWillJoin*/);
+  ALOGI("Configuring RPC threadpool");
+  configureRpcThreadpool(composer_thread_count, true /*callerWillJoin*/);
+  ALOGI("Configuring RPC threadpool...done!");
+
+  ALOGI("Registering Display HW Composer HAL as a service");
   if (composer->registerAsService() != android::OK) {
-    ALOGE("Cannot register QTI composer service");
+    ALOGE("Registering Display HW Composer HAL as a service...failed!");
     return -EINVAL;
   }
+  ALOGI("Registering Display HW Composer HAL as a service...done!");
 
-  ALOGI("Initialized qti-composer");
-  joinRpcThreadpool();
+  ALOGI("Registering DisplayConfig AIDL as a service");
+  ABinderProcess_setThreadPoolMaxThreadCount(0);
+  std::shared_ptr<DisplayConfigAIDL> displayConfig = ndk::SharedRefBase::make<DisplayConfigAIDL>();
+  const std::string instance = std::string() + DisplayConfigAIDL::descriptor + "/default";
+  if (!displayConfig->asBinder().get()) {
+    ALOGW("Display Config AIDL's binder is null");
+  }
+
+  binder_status_t status = AServiceManager_addService(displayConfig->asBinder().get(),
+                                                      instance.c_str());
+  if (status != STATUS_OK) {
+    ALOGW("Failed to register DisplayConfig AIDL as a service (status:%d)", status);
+  } else {
+    ALOGI("Successfully registered DisplayConfig AIDL as a service");
+  }
+
+  ALOGI("Joining RPC threadpool...");
+  ABinderProcess_joinThreadPool();
+
   return 0;
 }

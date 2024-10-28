@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2011-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2011-2021, The Linux Foundation. All rights reserved.
 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -30,9 +31,7 @@
 #ifndef __GR_ADRENO_INFO_H__
 #define __GR_ADRENO_INFO_H__
 
-#ifndef QMAA
-#include <media/msm_media_info.h>
-#endif
+#include <display/media/mmm_color_fmt.h>
 
 #include "gr_utils.h"
 
@@ -56,7 +55,9 @@ typedef enum {
   ADRENO_PIXELFORMAT_R8G8B8A8_SRGB = 29,
   ADRENO_PIXELFORMAT_D32_FLOAT = 40,
   ADRENO_PIXELFORMAT_D24_UNORM_S8_UINT = 45,
+  ADRENO_PIXELFORMAT_R8G8_UNORM = 49,
   ADRENO_PIXELFORMAT_D16_UNORM = 55,
+  ADRENO_PIXELFORMAT_R8_UNORM = 61,
   ADRENO_PIXELFORMAT_B5G6R5 = 85,
   ADRENO_PIXELFORMAT_B5G5R5A1 = 86,
   ADRENO_PIXELFORMAT_B8G8R8A8_UNORM = 87,
@@ -152,6 +153,15 @@ class AdrenoMemInfo {
    */
   void AlignCompressedRGB(int width, int height, int format, unsigned int *aligned_w,
                           unsigned int *aligned_h);
+
+  /*
+   * Function to compute the adreno aligned width and aligned height
+   * based on the width and format.
+   *
+   * @return aligned width, aligned height
+   */
+  void AlignGpuDepthStencilFormat(int width, int height, int format, int tile_enabled,
+                                  unsigned int *aligned_w, unsigned int *aligned_h);
 
   /*
    * Function to compute the pixel alignment requirement.

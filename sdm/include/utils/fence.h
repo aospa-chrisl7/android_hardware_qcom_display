@@ -82,8 +82,8 @@ class Fence {
                                  bool ignore_signaled);
 
   // Wait on null fence will return success.
-  static DisplayError Wait(const shared_ptr<Fence> &fence);
-  static DisplayError Wait(const shared_ptr<Fence> &fence, int timeout);
+  static int Wait(const shared_ptr<Fence> &fence);
+  static int Wait(const shared_ptr<Fence> &fence, int timeout);
 
   // Status check on null fence will return signaled.
   static Status GetStatus(const shared_ptr<Fence> &fence);

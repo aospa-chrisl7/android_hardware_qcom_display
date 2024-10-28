@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2014, 2016, 2018-2021, The Linux Foundation. All rights reserved.
+* Copyright (c) 2013-2014, 2016, 2018-2020, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -25,43 +25,41 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*     * Redistributions of source code must retain the above copyright
+*       notice, this list of conditions and the following disclaimer.
+*
+*     * Redistributions in binary form must reproduce the above
+*       copyright notice, this list of conditions and the following
+*       disclaimer in the documentation and/or other materials provided
+*       with the distribution.
+*
+*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*       contributors may be used to endorse or promote products derived
+*       from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
-
-/*
- * Changes from Qualcomm Innovation Center are provided under the following license:
- *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted (subject to the limitations in the
- * disclaimer below) provided that the following conditions are met:
- *
- *    * Redistributions of source code must retain the above copyright
- *      notice, this list of conditions and the following disclaimer.
- *
- *    * Redistributions in binary form must reproduce the above
- *      copyright notice, this list of conditions and the following
- *      disclaimer in the documentation and/or other materials provided
- *      with the distribution.
- *
- *    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *      contributors may be used to endorse or promote products derived
- *      from this software without specific prior written permission.
- *
- * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -108,10 +106,6 @@ int getDisplayVisibleRegion(int dpy, hwc_rect_t &rect) {
               __FUNCTION__, dpy, err);
     }
     return err;
-}
-
-int setViewFrame(int /* dpy */, int /* l */, int /* t */, int /* r */, int /* b */) {
-    return FAILED_TRANSACTION;
 }
 
 int setSecondaryDisplayStatus(int dpy, uint32_t status) {
@@ -357,6 +351,25 @@ int setPanelLuminanceAttributes(int dpy, float min_lum, float max_lum) {
     return err;
 }
 
+int GetDisplayPortId(int dpy, int *port_id) {
+    if (!port_id) {
+        return -EINVAL;
+    }
+    status_t err = (status_t) FAILED_TRANSACTION;
+    sp<IQService> binder = getBinder();
+    Parcel inParcel, outParcel;
+    if(binder != nullptr && binder.get() != nullptr) {
+        inParcel.writeInt32(dpy);
+        err = binder->dispatch(IQService::GET_DISPLAY_PORT_ID, &inParcel, &outParcel);
+        if(err) {
+            ALOGE("%s() failed with err %d", __FUNCTION__, err);
+            return err;
+        }
+        *port_id = outParcel.readInt32();
+    }
+    return err;
+}
+
 }// namespace
 
 // ----------------------------------------------------------------------------
@@ -411,7 +424,7 @@ extern "C" int controlPartialUpdate(int dpy, int mode) {
 extern "C" int waitForComposerInit() {
     int status = false;
     sp<IQService> binder = getBinder();
-    if (binder != nullptr) {
+    if (binder == nullptr) {
         sleep(2);
         binder = getBinder();
     }
@@ -430,50 +443,14 @@ extern "C" int waitForComposerInit() {
     return !status;
 }
 
-extern "C" int setStandByMode(int mode, int is_twm = false) {
-    status_t err = (status_t) FAILED_TRANSACTION;
+extern "C" int waitForComposerInitPerf() {
+    int status = false;
     sp<IQService> binder = getBinder();
-    Parcel inParcel, outParcel;
-
-    if(binder != nullptr) {
-        inParcel.writeInt32(mode);
-        inParcel.writeInt32(is_twm);
-        err = binder->dispatch(IQService::SET_STAND_BY_MODE,
-              &inParcel, &outParcel);
-        if(err) {
-            ALOGE("%s() failed with err %d", __FUNCTION__, err);
-        }
-    }
-    return err;
-}
-
-extern "C" int getPanelResolution(int *width, int *height) {
-    status_t err = (status_t) FAILED_TRANSACTION;
-    sp<IQService> binder = getBinder();
-    Parcel inParcel, outParcel;
-
-    if(binder != nullptr) {
-        err = binder->dispatch(IQService::GET_PANEL_RESOLUTION,
-              &inParcel, &outParcel);
-        if(err != 0) {
-            ALOGE_IF(getBinder(), "%s() failed with err %d", __FUNCTION__, err);
-        } else {
-            *width = outParcel.readInt32();
-            *height = outParcel.readInt32();
-        }
+    if (binder != nullptr) {
+        Parcel inParcel, outParcel;
+        binder->dispatch(IQService::GET_COMPOSER_STATUS, &inParcel, &outParcel);
+        status = !!outParcel.readInt32();
     }
 
-    return err;
-}
-
-extern "C" int delayFirstCommit(void) {
-    status_t err = (status_t) FAILED_TRANSACTION;
-    sp<IQService> binder = getBinder();
-    if(binder != nullptr) {
-        err = binder->dispatch(IQService::DELAY_FIRST_COMMIT, NULL, NULL);
-        if(err) {
-            ALOGE("%s() failed with err %d", __FUNCTION__, err);
-        }
-    }
-    return err;
+    return !status;
 }

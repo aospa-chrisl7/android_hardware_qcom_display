@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014, 2016-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014, 2016-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -20,6 +20,10 @@
 * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
 * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 /*! @file layer_buffer.h
@@ -35,6 +39,7 @@
 #include <utility>
 #include <vector>
 #include "sdm_types.h"
+#include "color_extensions.h"
 
 namespace sdm {
 
@@ -84,6 +89,11 @@ enum LayerBufferFormat {
   kFormatRGBA1010102Ubwc,  //!< UBWC aligned RGBA1010102 format
   kFormatRGBX1010102Ubwc,  //!< UBWC aligned RGBX1010102 format
   kFormatRGB101010,     // 10-bits Red, Green, Blue, interleaved in RGB order. No Alpha.
+  kFormatBlob,          // Task-specific data without a standard image structure.
+  kFormatRGBA16161616F,  //!< Floating point 16-bits Red, Green, Blue, Alpha
+                         //!< interleaved in RGBA order.
+  kFormatRGBA16161616FUbwc,  //!< UBWC aligned floating point 16-bits Red, Green, Blue, Alpha
+                             //!< interleaved in RGBA order.
 
   /* All YUV-Planar formats, Any new format will be added towards end of this group to maintain
      backward compatibility.
@@ -217,11 +227,27 @@ struct LayerBufferFlags {
 
       uint32_t game : 1;            //!< This flag shall be set by the client to indicate that the
                                     //!< the content is game.
+
+      uint32_t demura : 1;          //!< This flag shall be set to indicate that the
+                                    //!< content is demura correction data
     };
 
     uint32_t flags = 0;             //!< For initialization purpose only.
                                     //!< Client shall not refer to it directly.
   };
+};
+
+struct LayerHistData {
+  bool stats_valid; /* bool indicating if the following histogram is valid */
+  std::vector<uint32_t> stats_info; /* video histogram stats payload */
+  uint32_t display_width;       /* video display_width */
+  uint32_t display_height;      /* video display_height */
+};
+
+struct LayerTimestamp {
+  uint32_t valid; /* Below fields are valid only if this boolean is set to true */
+  uint32_t frame_number; /* Frame position of the content contained in the layer buffer */
+  uint64_t frame_timestamp_us; /* Content timestamp of the frame contained in the layer buffer */
 };
 
 /*! @brief This structure defines a layer buffer handle which contains raw buffer and its associated
@@ -278,12 +304,22 @@ struct LayerBuffer {
   UbwcCrStatsVector  ubwc_crstats[NUM_UBWC_CR_STATS_LAYERS] = {};
                                 //! < UBWC Compression ratio,stats. Stored as a vector of pair of
                                 //! of (tile size, #of tiles)
+
+  LayerHistData hist_data;      //!< Histogram data associated with this layer buffer.
+  LayerTimestamp timestamp_data;
+                                //!< Timestamp data associated with this layer buffer.
+
+  std::shared_ptr<CustomContentMetadata> extended_content_metadata;
+                                //! Vector to hold extended content MD associated with this buffer.
+
+
   LayerBuffer() {
     color_metadata.colorPrimaries = ColorPrimaries_BT709_5;
     color_metadata.transfer = Transfer_sRGB;
   }
 
   uint64_t handle_id = 0;
+  uint64_t usage = 0;           //!< Opaque Usage flags associated with this layer buffer.
 };
 
 // This enum represents buffer layout types.
@@ -291,6 +327,52 @@ enum BufferLayout {
   kLinear,    //!< Linear data
   kUBWC,      //!< UBWC aligned data
   kTPTiled    //!< Tightly Packed data
+};
+
+/*! @brief This structure defines a rectanglular area inside a display layer.
+
+  @sa LayerRectArray
+*/
+struct LayerRect {
+  float left   = 0.0f;   //!< Left-most pixel coordinate.
+  float top    = 0.0f;   //!< Top-most pixel coordinate.
+  float right  = 0.0f;   //!< Right-most pixel coordinate.
+  float bottom = 0.0f;   //!< Bottom-most pixel coordinate.
+
+  LayerRect() = default;
+
+  LayerRect(float l, float t, float r, float b) : left(l), top(t), right(r), bottom(b) { }
+
+  bool operator==(const LayerRect& rect) const {
+    return left == rect.left && right == rect.right && top == rect.top && bottom == rect.bottom;
+  }
+
+  bool operator!=(const LayerRect& rect) const {
+    return !operator==(rect);
+  }
+};
+
+/*! @brief This enum represents the Tappoints for CWB that are supported by the hardware. */
+enum CwbTapPoint {
+  kLmTapPoint,      // This is set by client to use Layer Mixer output for CWB.
+  kDsppTapPoint,    // This is set by client to use DSPP output for CWB.
+  kDemuraTapPoint,  // This is set by client to use Demura output for CWB.
+};
+
+/*! @brief This structure defines the configuration variables needed to perform CWB.
+
+  @sa LayerStack
+*/
+struct CwbConfig {
+  bool pu_as_cwb_roi = false;                        //!< Whether to include the PU ROI generated
+                                                     //!< from app layers in CWB ROI.
+  LayerRect cwb_roi = {};                            //!< Client specified ROI rect for CWB.
+  LayerRect cwb_full_rect = {};                      //!< Same as Output buffer Rect (unaligned).
+  CwbTapPoint tap_point = CwbTapPoint::kLmTapPoint;  //!< Client specified tap point for CWB.
+  void *dither_info = nullptr;                       //!< Pointer to the cwb dither setting.
+  bool avoid_refresh = false;                        //!< Whether to avoid additional refresh for
+                                                     //!< CWB Request, by default refresh occurs
+                                                     //!< for each CWB request to process it.
 };
 
 class LayerBufferObject {
@@ -301,4 +383,3 @@ class LayerBufferObject {
 }  // namespace sdm
 
 #endif  // __LAYER_BUFFER_H__
-

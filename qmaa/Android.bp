@@ -1,6 +1,7 @@
 soong_namespace {
     imports: [
         "hardware/qcom/display",
+        "hardware/qcom/display/libdebug",
     ],
 }
 composer_srcs = ["*.cpp"]
@@ -17,6 +18,8 @@ cc_binary {
     header_libs: [
         "display_headers",
         "qti_kernel_headers",
+        "qti_display_kernel_headers",
+        "device_kernel_headers",
     ],
 
     cflags: [
@@ -24,6 +27,7 @@ cc_binary {
         "-Wno-unused-parameter",
         "-DLOG_TAG=\"SDM\"",
     ],
+    clang: true,
 
     shared_libs: [
         "libbinder",

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -27,10 +27,17 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+
 #include <utils/constants.h>
 #include <utils/debug.h>
 #include <sync/sync.h>
 #include <stdarg.h>
+#include <QtiGralloc.h>
 
 #include "hwc_display_virtual.h"
 #include "hwc_debugger.h"
@@ -68,31 +75,46 @@ HWC2::Error HWCDisplayVirtual::Present(shared_ptr<Fence> *out_retire_fence) {
   return HWC2::Error::None;
 }
 
+HWC2::Error HWCDisplayVirtual::PreValidateDisplay(bool *exit_validate) {
+  return HWC2::Error::None;
+}
+
+HWC2::Error HWCDisplayVirtual::CommitOrPrepare(bool validate_only,
+                                               shared_ptr<Fence> *out_retire_fence,
+                                               uint32_t *out_num_types,
+                                               uint32_t *out_num_requests, bool *needs_commit) {
+  return HWC2::Error::None;
+}
+
 HWC2::Error HWCDisplayVirtual::DumpVDSBuffer() {
   if (dump_frame_count_ && !flush_ && dump_output_layer_) {
     if (output_handle_) {
       BufferInfo buffer_info;
-      const private_handle_t *output_handle =
-        reinterpret_cast<const private_handle_t *>(output_buffer_.buffer_id);
-      DisplayError error = kErrorNone;
-      if (!output_handle->base) {
-        error = buffer_allocator_->MapBuffer(output_handle, nullptr);
-        if (error != kErrorNone) {
-          DLOGE("Failed to map output buffer, error = %d", error);
-          return HWC2::Error::BadParameter;
-        }
+      const native_handle_t *output_handle =
+          reinterpret_cast<const native_handle_t *>(output_buffer_->buffer_id);
+      void *base_ptr = NULL;
+      int error = buffer_allocator_->MapBuffer(output_handle, nullptr, &base_ptr);
+      if (error != 0) {
+        DLOGE("Failed to map output buffer, error = %d", error);
+        return HWC2::Error::BadParameter;
       }
-      buffer_info.buffer_config.width = static_cast<uint32_t>(output_handle->width);
-      buffer_info.buffer_config.height = static_cast<uint32_t>(output_handle->height);
-      buffer_info.buffer_config.format =
-      HWCLayer::GetSDMFormat(output_handle->format, output_handle->flags);
-      buffer_info.alloc_buffer_info.size = static_cast<uint32_t>(output_handle->size);
-      DumpOutputBuffer(buffer_info, reinterpret_cast<void *>(output_handle->base),
-                       layer_stack_.retire_fence);
+      uint32_t width, height, alloc_size = 0;
+      int32_t format, flags = 0;
+      buffer_allocator_->GetWidth((void *)output_handle, width);
+      buffer_allocator_->GetHeight((void *)output_handle, height);
+      buffer_allocator_->GetFormat((void *)output_handle, format);
+      buffer_allocator_->GetPrivateFlags((void *)output_handle, flags);
+      buffer_allocator_->GetAllocationSize((void *)output_handle, alloc_size);
+
+      buffer_info.buffer_config.width = width;
+      buffer_info.buffer_config.height = height;
+      buffer_info.buffer_config.format = HWCLayer::GetSDMFormat(format, flags);
+      buffer_info.alloc_buffer_info.size = alloc_size;
+      DumpOutputBuffer(buffer_info, base_ptr, layer_stack_.retire_fence);
 
       int release_fence = -1;
       error = buffer_allocator_->UnmapBuffer(output_handle, &release_fence);
-      if (error != kErrorNone) {
+      if (error != 0) {
         DLOGE("Failed to unmap buffer, error = %d", error);
         return HWC2::Error::BadParameter;
       }
@@ -107,18 +129,20 @@ HWC2::Error HWCDisplayVirtual::SetOutputBuffer(buffer_handle_t buf,
   if (buf == nullptr) {
     return HWC2::Error::BadParameter;
   }
-  const private_handle_t *output_handle = static_cast<const private_handle_t *>(buf);
+  const native_handle_t *output_handle = static_cast<const native_handle_t *>(buf);
 
   if (output_handle) {
-    int output_handle_format = output_handle->format;
+    int output_handle_format, output_handle_flags = 0;
+    buffer_allocator_->GetPrivateFlags((void *)output_handle, output_handle_flags);
+    buffer_allocator_->GetFormat((void *)output_handle, output_handle_format);
     ColorMetaData color_metadata = {};
 
-    if (output_handle_format == HAL_PIXEL_FORMAT_RGBA_8888) {
-      output_handle_format = HAL_PIXEL_FORMAT_RGBX_8888;
+    if (output_handle_format == static_cast<int>(PixelFormat::RGBA_8888)) {
+      output_handle_format = static_cast<int>(PixelFormat::RGBX_8888);
     }
 
     LayerBufferFormat new_sdm_format =
-        HWCLayer::GetSDMFormat(output_handle_format, output_handle->flags);
+        HWCLayer::GetSDMFormat(output_handle_format, output_handle_flags);
     if (new_sdm_format == kFormatInvalid) {
       return HWC2::Error::BadParameter;
     }
@@ -127,32 +151,36 @@ HWC2::Error HWCDisplayVirtual::SetOutputBuffer(buffer_handle_t buf,
       return HWC2::Error::BadParameter;
     }
 
-    output_buffer_.flags.secure = 0;
-    output_buffer_.flags.video = 0;
-    output_buffer_.buffer_id = reinterpret_cast<uint64_t>(output_handle);
-    output_buffer_.format = new_sdm_format;
-    output_buffer_.color_metadata = color_metadata;
+    output_buffer_->flags.secure = 0;
+    output_buffer_->flags.video = 0;
+    output_buffer_->buffer_id = reinterpret_cast<uint64_t>(output_handle);
+    output_buffer_->format = new_sdm_format;
+    output_buffer_->color_metadata = color_metadata;
     output_handle_ = output_handle;
 
     // TZ Protected Buffer - L1
-    if (output_handle->flags & private_handle_t::PRIV_FLAGS_SECURE_BUFFER) {
-      output_buffer_.flags.secure = 1;
+    if (output_handle_flags & qtigralloc::PRIV_FLAGS_SECURE_BUFFER) {
+      output_buffer_->flags.secure = 1;
     }
 
     // ToDo: Need to extend for non-RGB formats
-    output_buffer_.planes[0].fd = output_handle->fd;
-    output_buffer_.planes[0].offset = output_handle->offset;
-    output_buffer_.planes[0].stride = UINT32(output_handle->width);
+    int fd = 0;
+    uint32_t width = 0;
+    buffer_allocator_->GetFd((void *)output_handle, fd);
+    buffer_allocator_->GetWidth((void *)output_handle, width);
+    output_buffer_->planes[0].fd = fd;
+    output_buffer_->planes[0].offset = 0;
+    output_buffer_->planes[0].stride = width;
   }
 
-  output_buffer_.acquire_fence = release_fence;
+  output_buffer_->acquire_fence = release_fence;
 
   return HWC2::Error::None;
 }
 
 HWC2::Error HWCDisplayVirtual::SetFrameDumpConfig(uint32_t count, uint32_t bit_mask_layer_type,
-                                                  int32_t format, bool post_processed) {
-  HWCDisplay::SetFrameDumpConfig(count, bit_mask_layer_type, format, post_processed);
+                                                  int32_t format, CwbConfig &cwb_config) {
+  HWCDisplay::SetFrameDumpConfig(count, bit_mask_layer_type, format);
   dump_output_layer_ = ((bit_mask_layer_type & (1 << OUTPUT_LAYER_DUMP)) != 0);
 
   DLOGI("output_layer_dump_enable %d", dump_output_layer_);
@@ -170,6 +198,10 @@ HWC2::Error HWCDisplayVirtual::GetDisplayType(int32_t *out_type) {
 }
 
 HWC2::Error HWCDisplayVirtual::SetColorMode(ColorMode mode) {
+  return HWC2::Error::None;
+}
+
+HWC2::Error HWCDisplayVirtual::SetColorModeWithRenderIntent(ColorMode mode, RenderIntent intent) {
   return HWC2::Error::None;
 }
 
